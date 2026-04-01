@@ -53,29 +53,41 @@ AgentRuntime (新增抽象)
 └───────────────────────┬───────────────────────────────────────┘
                         │ 声明式 YAML (Worker/Team CRD)
                         ▼
-┌───────────────────────────────────────────────────────────────┐
-│                    Controller Layer                           │
-│                                                               │
-│   WorkerReconciler   TeamReconciler   HumanReconciler         │
-│                                                               │
-│   ─ 期望状态 vs 实际状态                                       │
-│   ─ 调用 RuntimeRegistry.Get(spec.runtime) 获取适配器         │
-│   ─ 通过 AgentRuntime 接口执行 Create/Update/Delete           │
-└───────────────────────┬───────────────────────────────────────┘
-                        │ AgentRuntime 接口调用
-                        ▼
-┌───────────────────────────────────────────────────────────────┐
-│                     Runtime Layer (新增)                      │
-│                                                               │
-│   AgentRuntime (interface)                                    │
-│   ┌─────────────────┐  ┌─────────────────┐  ┌─────────────┐  │
-│   │ OpenClawAdapter │  │  CoPawAdapter   │  │  Future...  │  │
-│   └─────────────────┘  └─────────────────┘  └─────────────┘  │
-│                                                               │
-│   RuntimeRegistry  ─  注册 & 查找适配器                       │
-│   AgentSpec        ─  运行时无关的统一配置格式                  │
-└───────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────┐
+│         Controller Layer (Go)     │
+│                                   │
+│  WorkerReconciler                 │
+│  TeamReconciler     ─ 期望状态 vs │
+│  HumanReconciler      实际状态    │
+│                                   │
+│  ─ 生成 AgentSpec                 │
+│  ─ 写入 MinIO                     │
+│  ─ 注册 Matrix/Higress            │
+│  ─ 启动容器（docker run）         │
+└───────────────┬───────────────────┘
+                │ AgentSpec (JSON，写入 MinIO)
+                │ + docker run <runtime-image>
+                │
+        ┌───────┴────────────────────────────┐
+        │                                    │
+        ▼                                    ▼
+┌───────────────────┐              ┌─────────────────────┐
+│  Runtime Layer    │              │   Runtime Layer     │
+│  (Node.js)        │              │   (Python)          │
+│                   │              │                     │
+│  openclaw/        │              │  copaw/             │
+│  ─ 读 AgentSpec   │              │  ─ 读 AgentSpec     │
+│  ─ 生成           │              │  ─ 生成             │
+│    openclaw.json  │              │    config.json      │
+│  ─ 启动 OpenClaw  │              │    providers.json   │
+│    框架           │              │  ─ 启动 CoPaw 框架  │
+└───────────────────┘              └─────────────────────┘
 ```
+
+**关键设计原则**：
+- Controller 只负责通用基础设施操作（写 MinIO、注册 Matrix 账号、docker run），**不感知框架配置格式**
+- Runtime Adapter 和框架同语言，作为容器 entrypoint 的一部分，读取 AgentSpec 自行完成框架初始化
+- AgentSpec（JSON 格式）是 Controller 与 Runtime 之间的唯一契约，通过 MinIO 传递
 
 ---
 
@@ -83,27 +95,63 @@ AgentRuntime (新增抽象)
 
 ### 3.1 Runtime Layer（新增核心抽象）
 
-#### 3.1.1 AgentRuntime 接口
+Runtime Layer 与 Controller Layer **并列**，不是 Controller 的内部组件。
+
+- **Controller（Go）**：定义 AgentRuntime 接口和 AgentSpec 协议，负责通用基础设施操作
+- **各框架 Adapter（原生语言）**：实现 AgentSpec → 框架原生配置的转换，作为容器 entrypoint 的一部分
+
+#### 3.1.1 Controller 侧：AgentRuntime 接口（通用操作）
+
+Controller 只关心容器生命周期，不感知框架内部格式：
 
 ```go
-// internal/runtime/interface.go
+// hiclaw-controller/internal/runtime/interface.go
 
 type AgentRuntime interface {
-    // 创建并启动 Agent 容器/进程
+    // 写入 AgentSpec 到 MinIO，注册基础设施资源，启动容器
     Create(ctx context.Context, spec AgentSpec) (*AgentInstance, error)
 
-    // 更新 Agent 配置（热更新 skills/model，或重建容器）
+    // 更新 AgentSpec 并重启容器（热更新或重建）
     Update(ctx context.Context, name string, spec AgentSpec) error
 
-    // 停止并销毁 Agent
+    // 停止容器，清理基础设施资源（Matrix Room、Higress Consumer）
     Delete(ctx context.Context, name string) error
 
-    // 查询 Agent 运行状态
+    // 查询容器运行状态
     GetStatus(ctx context.Context, name string) (*AgentStatus, error)
 
     // 运行时标识符（"openclaw" / "copaw" / ...）
     Name() string
 }
+```
+
+Controller 侧的实现是一个**通用 Launcher**，各运行时只需注册镜像名称和启动参数，无需实现框架特定的配置生成：
+
+```go
+// hiclaw-controller/internal/runtime/launcher.go
+
+type Launcher struct {
+    image         string            // 框架容器镜像，e.g. "hiclaw/worker-agent"
+    name          string            // 运行时标识
+    dockerClient  ContainerClient
+    minioClient   StorageClient
+    matrixClient  MatrixClient
+    higress       HigressClient
+}
+
+func (l *Launcher) Create(ctx context.Context, spec AgentSpec) (*AgentInstance, error) {
+    // 1. 在 Higress 注册 Consumer，获取 gateway key
+    // 2. 在 Matrix 注册账号，创建 Room，获取 access token
+    // 3. 将完整 AgentSpec（含 Matrix/Higress 凭证）序列化为 JSON
+    //    写入 MinIO: agents/{name}/agent-spec.json
+    // 4. docker run l.image --name hiclaw-worker-{name}
+    //    （容器 entrypoint 从 MinIO 读取 agent-spec.json 完成框架初始化）
+    // 5. 返回 AgentInstance{MatrixUserID, RoomID, ContainerID}
+}
+
+// RuntimeRegistry 保持不变，注册 Launcher 实例
+registry.Register(&Launcher{name: "openclaw", image: "hiclaw/worker-agent", ...})
+registry.Register(&Launcher{name: "copaw",    image: "hiclaw/copaw-worker", ...})
 ```
 
 #### 3.1.2 统一 AgentSpec（运行时无关配置）
@@ -211,75 +259,89 @@ type HeartbeatSpec struct {
 - `Provider.Model.ContextWindow` → `agents.running.max_input_length`
 - 将 Provider 配置拆分写入独立的 `providers.json`
 
-#### 3.1.3 适配器实现
+#### 3.1.3 各框架 Adapter（原生语言实现）
 
-**OpenClawAdapter**：
-- 职责：生成 `openclaw.json` → 推送到 MinIO → `docker run hiclaw/worker-agent`
-- 当前 `create-worker.sh` 中 openclaw 分支的逻辑迁移至此
+Adapter 不在 Controller 中，而是各框架容器自己的 entrypoint 逻辑，用框架的原生语言实现，从 MinIO 读取 AgentSpec 并完成框架初始化。
 
-**CoPawAdapter**：
-- 职责：生成 `openclaw.json`（CoPaw 兼容格式）→ 推送到 MinIO → `docker run hiclaw/copaw-worker`
-- 消除 `bridge.py` 中的 hack（CoPaw 适配逻辑移入 Adapter，不再需要运行时 patch）
-- 目标：CoPaw 容器直接读取适配后的配置，无需运行时转换
+**OpenClaw Adapter（Node.js）**，位于 `openclaw/src/adapter/`：
 
-```go
-// internal/runtime/openclaw/adapter.go
-type OpenClawAdapter struct {
-    dockerClient  ContainerClient
-    minioClient   StorageClient
-    matrixClient  MatrixClient
-    higress       HigressClient
-}
+```javascript
+// openclaw/src/adapter/index.js
+// 容器启动时执行，替代 generate-worker-config.sh
 
-func (a *OpenClawAdapter) Create(ctx context.Context, spec AgentSpec) (*AgentInstance, error) {
-    // 1. 生成 openclaw.json + SOUL.md + AGENTS.md
-    // 2. 推送配置到 MinIO agents/{name}/
-    // 3. 在 Higress 创建 Consumer + 分配 MCP 权限
-    // 4. 注册 Matrix 账号 + 创建 Room
-    // 5. docker run --name hiclaw-worker-{name} ...
-    // 6. 返回 AgentInstance{MatrixUserID, RoomID, ContainerID}
-}
+const spec = await loadAgentSpec(process.env.MINIO_ENDPOINT, process.env.AGENT_NAME);
+
+// AgentSpec → openclaw.json
+const config = {
+  gateway: buildGatewayConfig(spec),          // mode/port 由此处注入
+  channels: { matrix: buildMatrixConfig(spec.matrix) },
+  models: { mode: "merge", providers: buildProviders(spec.provider) },
+  agents: { defaults: buildAgentDefaults(spec.behavior, spec.model) },
+  session: buildSessionConfig(),
+  plugins: { load: { paths: ["/opt/openclaw/extensions/matrix"] },
+             entries: { matrix: { enabled: true } } }
+};
+
+await writeToMinIO(`agents/${spec.name}/openclaw.json`, config);
+await startOpenClaw();
 ```
+
+**CoPaw Adapter（Python）**，即重构后的 `copaw/src/copaw_worker/bridge.py`：
+
+```python
+# copaw/src/copaw_worker/bridge.py（重构：从 AgentSpec 转换，消除 patch_copaw_paths hack）
+
+def bridge_agentspec_to_copaw(spec: AgentSpec, working_dir: str):
+    """
+    AgentSpec → CoPaw config.json + providers.json
+    替代原来从 openclaw.json 二次转换的方式
+    """
+    write_config_json(spec, working_dir)      # channels（snake_case）+ agents.running
+    write_providers_json(spec, working_dir)   # 独立 providers 文件
+    # 不再需要 patch_copaw_paths：working_dir 通过正式启动参数传入 CoPaw
+```
+
+两种 Adapter 的**共同输入**是 `agent-spec.json`（Controller 写入 MinIO 的 AgentSpec），**各自负责**生成框架原生配置。
 
 #### 3.1.4 RuntimeRegistry
 
 ```go
-// internal/runtime/registry.go
+// hiclaw-controller/internal/runtime/registry.go
 
 type RuntimeRegistry struct {
-    adapters map[string]AgentRuntime
+    runtimes map[string]AgentRuntime
 }
 
-func (r *RuntimeRegistry) Register(runtime AgentRuntime) {
-    r.adapters[runtime.Name()] = runtime
+func (r *RuntimeRegistry) Register(rt AgentRuntime) {
+    r.runtimes[rt.Name()] = rt
 }
 
 func (r *RuntimeRegistry) Get(name string) (AgentRuntime, error) {
-    if rt, ok := r.adapters[name]; ok {
+    if rt, ok := r.runtimes[name]; ok {
         return rt, nil
     }
-    return nil, fmt.Errorf("unknown runtime: %s (registered: %v)", name, r.Names())
+    return nil, fmt.Errorf("unknown runtime: %s", name)
 }
 ```
 
-主程序初始化：
+主程序初始化（Controller 只注册镜像信息，无框架特定逻辑）：
 
 ```go
-// cmd/controller/main.go
+// hiclaw-controller/cmd/controller/main.go
 
 registry := runtime.NewRegistry()
-registry.Register(openclaw.NewAdapter(dockerClient, minioClient, matrixClient, higress))
-registry.Register(copaw.NewAdapter(dockerClient, minioClient, matrixClient, higress))
-// 未来：registry.Register(newRuntime.NewAdapter(...))
+registry.Register(&runtime.Launcher{Name: "openclaw", Image: "hiclaw/worker-agent",    /* clients */ })
+registry.Register(&runtime.Launcher{Name: "copaw",    Image: "hiclaw/copaw-worker",    /* clients */ })
+// 接入新框架：registry.Register(&runtime.Launcher{Name: "xxx", Image: "hiclaw/xxx-worker", ...})
 ```
 
 ---
 
 ### 3.2 Controller Layer（升级现有）
 
-**现状**：Reconciler → `executor/shell.go` → `create-worker.sh`（内含 runtime 分支）
+**现状**：Reconciler → `executor/shell.go` → `create-worker.sh`（内含 runtime 分支，感知 openclaw.json 格式）
 
-**升级后**：Reconciler → `RuntimeRegistry.Get(spec.runtime)` → `AgentRuntime.Create/Update/Delete`
+**升级后**：Reconciler → `RuntimeRegistry.Get(spec.runtime)` → `Launcher.Create`（写 AgentSpec + docker run，不感知框架格式）
 
 核心变化：
 
@@ -312,6 +374,8 @@ func (r *WorkerReconciler) reconcileCreate(ctx context.Context, worker *v1beta1.
     return r.Status().Update(ctx, worker)
 }
 ```
+
+> Controller 不再生成 `openclaw.json` 或 CoPaw 配置，这些格式细节由各框架自己的 Adapter 处理。
 
 Controller 的其他职责**不变**：
 - 仍使用 kine + controller-runtime informer
@@ -373,37 +437,35 @@ Team Leader 和 Worker **不需要感知 Runtime 层**。它们的关注点：
 - 汇报结果
 
 **Runtime 抽象对 TeamLeader/Worker 的影响**：
-- **SOUL.md / AGENTS.md**：无变化，继续通过 MinIO/package 分发
-- **Skills**：无变化，通过 MinIO 分发
-- **openclaw.json 格式**：作为统一的 AgentSpec 序列化格式，两种 runtime 都接受（CoPaw 适配器在写入前完成格式转换，不再运行时 patch）
-- **启动流程**：由 Adapter 负责，容器内不需要 bridge.py
+- **SOUL.md / AGENTS.md / Skills**：无变化，继续通过 MinIO/package 分发
+- **启动流程**：Controller 写入 `agent-spec.json` 后 docker run，容器内的框架 Adapter 完成初始化，TeamLeader/Worker 本身无感知
+- **openclaw.json**：继续作为 OpenClaw 框架的原生配置，由 OpenClaw Adapter 生成；CoPaw 有自己的 config.json，由 CoPaw Adapter 生成；两者都以 AgentSpec 为统一输入
 
 ---
 
 ## 4. 项目结构调整
 
+Runtime Layer 与 Controller Layer 并列，分别属于各自的目录（框架目录 vs controller 目录），通过 MinIO 中的 `agent-spec.json` 协议文件交互。
+
 ### 4.1 hiclaw-controller 目录结构（升级后）
+
+Controller 侧只保留通用运行时抽象，**不含框架特定配置生成逻辑**：
 
 ```
 hiclaw-controller/
 ├── go.mod
 ├── cmd/
-│   ├── controller/main.go          # 注册 RuntimeRegistry + 启动 reconciler
+│   ├── controller/main.go          # 注册 Launcher 实例 + 启动 reconciler
 │   └── hiclaw/main.go              # CLI 工具（apply/get/delete）
 ├── api/v1beta1/
 │   ├── types.go                    # CRD 类型（不变）
 │   └── register.go
 ├── internal/
-│   ├── runtime/                    # ★ 新增 Runtime 抽象层
+│   ├── runtime/                    # ★ 通用 Runtime 抽象（不含框架特定逻辑）
 │   │   ├── interface.go            # AgentRuntime 接口
-│   │   ├── spec.go                 # AgentSpec, AgentInstance, AgentStatus
+│   │   ├── spec.go                 # AgentSpec 定义（跨层协议）
 │   │   ├── registry.go             # RuntimeRegistry
-│   │   ├── openclaw/
-│   │   │   ├── adapter.go          # OpenClawAdapter 实现
-│   │   │   └── config.go           # openclaw.json 生成逻辑（从 create-worker.sh 迁移）
-│   │   └── copaw/
-│   │       ├── adapter.go          # CoPawAdapter 实现
-│   │       └── config.go           # CoPaw 配置生成（替代 bridge.py）
+│   │   └── launcher.go             # 通用 Launcher（写 MinIO + docker run）
 │   ├── controller/
 │   │   ├── worker_controller.go    # 升级：使用 RuntimeRegistry
 │   │   ├── team_controller.go      # 升级：使用 RuntimeRegistry
@@ -417,33 +479,51 @@ hiclaw-controller/
 │   └── mail/smtp.go
 ```
 
-### 4.2 copaw 目录（过渡期调整）
+### 4.2 openclaw 目录（新增 Adapter，Node.js）
 
-`bridge.py` 的 hack 逻辑迁移到 `internal/runtime/copaw/config.go` 后，`copaw/` 目录中的 bridge.py 可逐步废弃。CoPaw 容器只需要：
-- `worker.py`：启动 CoPaw AgentRunner
-- `matrix_channel.py`：Matrix 频道适配
-- `sync.py`：MinIO 同步
-- `config.py`：读取已经由 Adapter 生成好的 CoPaw 格式配置（不再需要运行时转换）
+OpenClaw Adapter 作为容器 entrypoint，替代 `generate-worker-config.sh`：
+
+```
+openclaw/                           # 或 worker/ 目录下
+├── src/
+│   ├── adapter/
+│   │   ├── index.js                # ★ 新增：读 AgentSpec → 生成 openclaw.json
+│   │   └── spec.js                 # AgentSpec JSON 解析
+│   └── ...                         # 现有 OpenClaw 运行时代码
+```
+
+### 4.3 copaw 目录（重构 Adapter，Python）
+
+`bridge.py` 重构为正式的 CoPaw Adapter，输入从 `openclaw.json` 改为 `agent-spec.json`，消除 `patch_copaw_paths` hack：
+
+```
+copaw/src/copaw_worker/
+├── bridge.py                       # ★ 重构：AgentSpec → CoPaw config，不再需要 patch_copaw_paths
+├── worker.py                       # 启动 CoPaw AgentRunner（不变）
+├── matrix_channel.py               # Matrix 频道（不变）
+├── sync.py                         # MinIO 同步（不变）
+└── config.py                       # 读取 bridge.py 生成好的配置（简化）
+```
 
 ---
 
 ## 5. 迁移路径
 
-### Phase 1：接口定义（不破坏现有功能）
+### Phase 1：接口定义 + OpenClaw Adapter（不破坏现有功能）
 
-1. 定义 `AgentRuntime` 接口 + `AgentSpec` 数据结构
-2. 实现 `OpenClawAdapter`，将 `create-worker.sh` 中的 openclaw 逻辑迁移进来
-3. `WorkerReconciler` 改为通过 `RuntimeRegistry` 调用（先只注册 OpenClaw）
-4. 原有 shell 脚本保留，作为回退
-5. **验收**：现有集成测试全部通过
+1. 在 Controller 侧定义 `AgentRuntime` 接口、`AgentSpec` 数据结构、通用 `Launcher`
+2. 在 `openclaw/src/adapter/` 实现 Node.js Adapter：读取 `agent-spec.json` → 生成 `openclaw.json`
+3. Controller Launcher 改为：写 `agent-spec.json` 到 MinIO → docker run openclaw 镜像
+4. `WorkerReconciler` 改为通过 `RuntimeRegistry` 调用（先只注册 openclaw Launcher）
+5. 原有 shell 脚本保留，作为回退
+6. **验收**：现有集成测试全部通过
 
-### Phase 2：CoPaw 适配器
+### Phase 2：CoPaw Adapter 重构
 
-1. 实现 `CoPawAdapter`，在适配器内完成配置格式转换
-2. 消除 `copaw/bridge.py` 中的 `patch_copaw_paths` hack
-3. CoPaw 容器镜像去掉 bridge.py 依赖
-4. 注册 `CoPawAdapter` 到 `RuntimeRegistry`
-5. **验收**：CoPaw Worker 创建/删除/更新测试通过
+1. 重构 `copaw/bridge.py`：输入改为 `agent-spec.json`（替代从 `openclaw.json` 二次转换）
+2. 消除 `patch_copaw_paths` hack（working_dir 通过正式启动参数传入）
+3. 注册 copaw Launcher 到 `RuntimeRegistry`
+4. **验收**：CoPaw Worker 创建/删除/更新测试通过
 
 ### Phase 3：Manager 解耦
 
@@ -465,10 +545,10 @@ hiclaw-controller/
 
 假设未来接入一个新的 Agent 框架：
 
-1. 实现 `internal/runtime/<new-runtime>/adapter.go`（实现 `AgentRuntime` 接口）
-2. 在 `cmd/controller/main.go` 注册：`registry.Register(newRuntime.NewAdapter(...))`
-3. Worker CRD 中 `spec.runtime: <new-runtime>`
-4. **Manager / TeamLeader / Worker 零修改**
+1. 在新框架的容器目录中，用**框架原生语言**实现 entrypoint adapter：读取 `agent-spec.json` → 框架原生配置 → 启动框架
+2. 在 `hiclaw-controller/cmd/controller/main.go` 注册一行：`registry.Register(&runtime.Launcher{Name: "xxx", Image: "hiclaw/xxx-worker", ...})`
+3. Worker CRD 中 `spec.runtime: xxx`
+4. **Controller Go 代码零修改**，**Manager / TeamLeader / Worker 零修改**
 
 ---
 
