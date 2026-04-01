@@ -15,7 +15,7 @@ HiClaw 当前架构中，Manager/TeamLeader/Worker 的运行时选择（OpenClaw
 | Worker CRD `spec.runtime` | 已有 `openclaw | copaw` 字段，但只到 controller 层，没有向下传递到统一接口 |
 
 这带来的问题：
-- **新增运行时成本高**：接入第三个框架（如 Manus、AutoGen）需要修改多处 shell 脚本
+- **新增运行时成本高**：接入新框架需要修改多处 shell 脚本
 - **Manager 感知 Runtime 细节**：Manager 的 `worker-management` skill 包含运行时相关逻辑
 - **bridge.py 脆弱**：强依赖 CoPaw 内部实现路径，CoPaw 版本升级极易破坏
 - **测试困难**：无法 mock Runtime，集成测试强依赖容器环境
@@ -33,6 +33,8 @@ AgentRuntime (新增抽象)
 ```
 
 **核心原则：业务层（Manager/TeamLeader/Worker）对 Runtime 零感知。**
+
+> 本文档中"第三方框架"指未来可能接入的其他 Agent 运行时，不预设具体实现。
 
 ---
 
@@ -106,30 +108,108 @@ type AgentRuntime interface {
 
 #### 3.1.2 统一 AgentSpec（运行时无关配置）
 
-现有 Worker CRD 的 `spec` 字段即是声明式层，AgentSpec 是 Runtime 层的内部表示，由 Controller 从 CRD 转换而来：
+现有 Worker CRD 的 `spec` 字段即是声明式层，AgentSpec 是 Runtime 层的内部表示，由 Controller 从 CRD 转换而来。
+
+AgentSpec 的字段设计**以 `openclaw.json` 的实际结构为基准**，CoPawAdapter 在此基础上做格式转换（camelCase→snake_case、拆分 providers.json 等）。
 
 ```go
 // internal/runtime/spec.go
 
+// AgentSpec 对应 openclaw.json 的核心字段，剥离基础设施相关配置
+// （gateway.mode/port、plugins 由各 Adapter 自行注入）
 type AgentSpec struct {
-    Name     string
-    Model    string
-    Image    string            // 可选，runtime 有默认值
-    Identity AgentIdentity     // SOUL.md 内容 or URI
-    Agents   string            // AGENTS.md 内容 or URI
-    Skills   []SkillSpec
-    MCP      []MCPServerSpec
-    Channels []ChannelSpec     // Matrix, DingTalk, Feishu 等
-    Memory   MemorySpec
-    Env      map[string]string // 注入运行时环境变量
-    Package  string            // 业务自定义包 URI（file/http/nacos）
+    Name  string
+    Image string // 可选，Adapter 有默认镜像
+
+    // 模型选择：对应 openclaw agents.defaults.model.primary
+    // 格式："provider-id/model-id"，例如 "higress/claude-opus-4-6"
+    Model string
+
+    // Provider 配置：对应 openclaw models.providers[id]
+    Provider ProviderSpec
+
+    // Matrix 频道：对应 openclaw channels.matrix
+    Matrix MatrixSpec
+
+    // Agent 行为：对应 openclaw agents.defaults
+    Behavior AgentBehavior
+
+    // 身份文件：SOUL.md / AGENTS.md（inline 内容或 MinIO URI）
+    Soul   string
+    Agents string
+
+    // Skill 名称列表（Controller 负责从 MinIO 解析为实际路径）
+    Skills []string
+
+    // MCP Server 名称列表（Controller 负责在 Higress 配置权限）
+    McpServers []string
+
+    // 业务自定义包 URI（file:// / http:// / nacos://）
+    Package string
 }
 
-type AgentIdentity struct {
-    Source string  // "inline" | "minio" | "package"
-    Content string // inline: 直接内容; minio/package: URI
+// ProviderSpec 对应 openclaw models.providers[id] 中的连接配置
+// 模型元数据（contextWindow/maxTokens/reasoning/input）由 Controller
+// 从 known-models 配置解析后注入，Adapter 可按需使用
+type ProviderSpec struct {
+    ID      string // provider 标识，也是 openclaw 中的 provider-id
+    BaseURL string // models.providers[id].baseUrl
+    APIKey  string // models.providers[id].apiKey（来自 Higress consumer key）
+    Model   ModelMeta
+}
+
+type ModelMeta struct {
+    ID            string   // model-id 部分
+    Name          string
+    ContextWindow int
+    MaxTokens     int
+    Reasoning     bool
+    Input         []string // ["text"] or ["text", "image"]
+}
+
+// MatrixSpec 对应 openclaw channels.matrix
+type MatrixSpec struct {
+    Homeserver     string
+    AccessToken    string
+    Encryption     bool
+    DMAllowFrom    []string // channels.matrix.dm.allowFrom
+    GroupAllowFrom []string // channels.matrix.groupAllowFrom
+    HistoryLimit   int      // 可选，0 表示使用默认值
+}
+
+// AgentBehavior 对应 openclaw agents.defaults
+type AgentBehavior struct {
+    TimeoutSeconds int
+    MaxConcurrent  int
+    Heartbeat      *HeartbeatSpec // 仅 Manager/TeamLeader 使用
+}
+
+type HeartbeatSpec struct {
+    Every  string // e.g. "1h"
+    Prompt string
 }
 ```
+
+**与 openclaw.json 的字段映射关系**：
+
+| AgentSpec 字段 | openclaw.json 路径 |
+|---|---|
+| `Model` | `agents.defaults.model.primary` ("provider-id/model-id") |
+| `Provider.BaseURL` | `models.providers[id].baseUrl` |
+| `Provider.APIKey` | `models.providers[id].apiKey` |
+| `Provider.Model.*` | `models.providers[id].models[0].*` |
+| `Matrix.Homeserver` | `channels.matrix.homeserver` |
+| `Matrix.AccessToken` | `channels.matrix.accessToken` |
+| `Matrix.DMAllowFrom` | `channels.matrix.dm.allowFrom` |
+| `Matrix.GroupAllowFrom` | `channels.matrix.groupAllowFrom` |
+| `Behavior.TimeoutSeconds` | `agents.defaults.timeoutSeconds` |
+| `Behavior.Heartbeat` | `agents.defaults.heartbeat` |
+
+**CoPawAdapter 的额外转换职责**（消除 bridge.py）：
+- camelCase → snake_case（`accessToken` → `access_token` 等）
+- `Provider.Model.Input` 含 "image" → `vision_enabled: true`
+- `Provider.Model.ContextWindow` → `agents.running.max_input_length`
+- 将 Provider 配置拆分写入独立的 `providers.json`
 
 #### 3.1.3 适配器实现
 
@@ -190,7 +270,7 @@ func (r *RuntimeRegistry) Get(name string) (AgentRuntime, error) {
 registry := runtime.NewRegistry()
 registry.Register(openclaw.NewAdapter(dockerClient, minioClient, matrixClient, higress))
 registry.Register(copaw.NewAdapter(dockerClient, minioClient, matrixClient, higress))
-// 未来：registry.Register(manus.NewAdapter(...))
+// 未来：registry.Register(newRuntime.NewAdapter(...))
 ```
 
 ---
@@ -383,11 +463,11 @@ hiclaw-controller/
 
 ## 6. 接入新运行时的成本（设计目标验证）
 
-假设未来接入 **Manus** 框架：
+假设未来接入一个新的 Agent 框架：
 
-1. 实现 `internal/runtime/manus/adapter.go`（实现 `AgentRuntime` 接口）
-2. 在 `cmd/controller/main.go` 注册：`registry.Register(manus.NewAdapter(...))`
-3. Worker CRD 中 `spec.runtime: manus`
+1. 实现 `internal/runtime/<new-runtime>/adapter.go`（实现 `AgentRuntime` 接口）
+2. 在 `cmd/controller/main.go` 注册：`registry.Register(newRuntime.NewAdapter(...))`
+3. Worker CRD 中 `spec.runtime: <new-runtime>`
 4. **Manager / TeamLeader / Worker 零修改**
 
 ---
