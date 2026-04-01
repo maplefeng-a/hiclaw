@@ -78,7 +78,63 @@ HiClaw 当前架构中，运行时选择（OpenClaw vs CoPaw）以硬编码方�
 
 ---
 
-## 3. AgentSpec：跨层数据契约
+## 3. HiClaw Agent 接入要求
+
+接入要求定义了一个 Agent 要成为合法的 HiClaw 成员必须满足哪些条件。这是 Runtime Adapter 的设计目标——不管底层用什么框架，最终都要达到这些要求。
+
+### 3.1 核心能力要求
+
+| 要求 | 说明 |
+|------|------|
+| **通信** | 通过 Matrix 频道收发消息，支持 @mention 唤醒，遵守 HiClaw 通信协议（完成标记、NO_REPLY 语义等） |
+| **模型** | 通过 Higress AI Gateway 调用 LLM，凭证以 consumer key 方式注入，Agent 不直接持有上游 API key |
+| **技能** | 支持 HiClaw 标准技能格式：`skills/<name>/SKILL.md` + `skills/<name>/scripts/`，Manager 通过 MinIO 分发 |
+| **MCP 工具** | 通过 `config/mcporter.json` 配置 MCP Server 访问，调用方式为 mcporter CLI |
+| **记忆** | 维护 `memory/YYYY-MM-DD.md` 日志和 `memory/MEMORY.md` 长期知识，并同步回 MinIO |
+| **文件同步** | 遵守 MinIO 同步边界：Manager 管理的路径只读（openclaw.json、skills/、config/）；Worker 自身产出可写回 |
+| **身份** | 加载 SOUL.md 作为 system prompt，加载 AGENTS.md 作为工作指南 |
+
+### 3.2 Workspace 标准布局（逻辑视图）
+
+HiClaw 定义的逻辑 workspace 是框架无关的，各 Adapter 负责将其映射到框架的物理目录：
+
+```
+<workspace>/
+├── SOUL.md                    # 身份 / 人格 / 行为约束
+├── AGENTS.md                  # 工作指南 / 技能目录 / 通信规则
+├── skills/                    # 技能集（Manager 通过 MinIO 分发）
+│   └── <skill-name>/
+│       ├── SKILL.md
+│       └── scripts/
+├── memory/                    # 记忆（Agent 读写，同步回 MinIO）
+│   ├── YYYY-MM-DD.md
+│   └── MEMORY.md
+├── config/
+│   └── mcporter.json          # MCP Server 配置（Manager 管理）
+└── shared/                    # 协作空间（MinIO 共享，只读参考）
+    ├── tasks/<task-id>/
+    └── projects/<project-id>/
+```
+
+### 3.3 各框架与标准布局的映射
+
+OpenClaw 和 CoPaw 对同一套逻辑文件有不同的物理布局期望，这正是 Adapter 的 Workspace 组织职责所在：
+
+| 逻辑路径 | OpenClaw 物理路径 | CoPaw 物理路径 |
+|---------|-----------------|----------------|
+| workspace 根 | `~/hiclaw-fs/agents/<name>/` | `~/.copaw-worker/<name>/` |
+| SOUL.md | `<root>/SOUL.md` | `<root>/SOUL.md` → 启动时复制到 `.copaw/SOUL.md` |
+| AGENTS.md | `<root>/AGENTS.md` | `<root>/AGENTS.md` → 启动时复制到 `.copaw/AGENTS.md` |
+| skills/ | `<root>/skills/` | `.copaw/active_skills/`（先播种框架内置，再覆盖 MinIO 技能） |
+| memory/ | `<root>/memory/` | `.copaw/memory/` |
+| config/mcporter.json | `<root>/config/mcporter.json` | `.copaw/config/mcporter.json` |
+| Matrix 频道 | 内置插件，无需安装 | 需将 `matrix_channel.py` 安装至 `.copaw/custom_channels/` |
+| 模型凭证 | 内嵌 `openclaw.json` | 独立写入 `.copaw/.secret/providers.json` |
+| 会话状态 | `~/.openclaw/agents/` | `.copaw/sessions/` |
+
+---
+
+## 4. AgentSpec：跨层数据契约
 
 AgentSpec 是 Controller 生成、Runtime Adapter 消费的完备 Agent 描述。它比 Worker CRD 更底层：Worker CRD 是用户面向的声明（只写业务关心的字段），AgentSpec 是 Controller reconcile 后的完整结果——不仅继承用户声明的字段，还注入了所有运行时所需的凭证和基础设施信息。
 
@@ -163,9 +219,9 @@ infra:
 
 ---
 
-## 4. 各层职责
+## 5. 各层职责
 
-### 4.1 Controller Layer
+### 5.1 Controller Layer
 
 职责范围：
 - 监听 Worker/Team/Human CRD 变化，执行 reconcile
@@ -175,19 +231,29 @@ infra:
 
 通过 `RuntimeRegistry` 按 `spec.runtime` 字段选择对应的容器镜像启动参数，各运行时只需注册镜像名称，无需在 Go 侧实现配置转换逻辑。
 
-### 4.2 Runtime Layer
+### 5.2 Runtime Layer
 
-与 Controller 并列，以各框架目录为载体，用框架原生语言实现：
+与 Controller 并列，位于根目录 `runtime/` 下，各框架用原生语言实现。每个 Adapter 的职责分为两部分：
 
-| 运行时 | 位置 | 语言 | 职责 |
-|--------|------|------|------|
-| OpenClaw | `runtime/openclaw/` | Node.js | 读 AgentSpec → 生成 `openclaw.json` → 启动 OpenClaw |
-| CoPaw | `runtime/copaw/`（重构自 `copaw/bridge.py`） | Python | 读 AgentSpec → 生成 `config.json` + `providers.json` → 启动 CoPaw |
-| 未来框架 | `runtime/<framework>/` | 框架原生语言 | 同上，只需实现本层逻辑 |
+**① Workspace 组织**：按框架约定建立目录结构，将 HiClaw 标准逻辑布局映射到框架物理路径
+- 创建框架所需目录（`active_skills/`、`custom_channels/`、`.secret/` 等）
+- 复制 SOUL.md、AGENTS.md 到框架期望的位置
+- 安装框架特定组件（CoPaw 需安装 `matrix_channel.py` 到 `custom_channels/`）
+- 播种框架内置技能（CoPaw 需先初始化 `active_skills/`，再用 MinIO 技能覆盖）
 
-CoPaw 的 `bridge.py` 重构后输入从 `openclaw.json` 改为 `agent-spec.yaml`，消除 `patch_copaw_paths` hack——working_dir 通过正式启动参数传入，不再运行时修改模块常量。
+**② Config 生成**：将 AgentSpec 转换为框架原生配置文件
+- OpenClaw：生成 `openclaw.json`（channels、models、agents、session、plugins 各节）
+- CoPaw：生成 `config.json`（channels snake_case）+ `.secret/providers.json`（拆分模型凭证）
 
-### 4.3 Manager Layer
+| 运行时 | 位置 | 语言 |
+|--------|------|------|
+| OpenClaw | `runtime/openclaw/` | Node.js |
+| CoPaw | `runtime/copaw/`（重构自 `copaw/bridge.py`） | Python |
+| 未来框架 | `runtime/<framework>/` | 框架原生语言 |
+
+CoPaw Adapter 重构后消除 `patch_copaw_paths` hack：working_dir 通过正式启动参数传入框架，不再运行时修改模块常量；bridge 输入从 `openclaw.json` 改为 `agent-spec.yaml`。
+
+### 5.3 Manager Layer
 
 Manager 职责重新定位为**系统配置管理员**：
 
@@ -212,7 +278,7 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 | `model-switch` | 直接修改 `openclaw.json` | 更新 Worker CRD → `hiclaw apply` |
 | `mcp-server-management` | 直接 Higress API | 不变 |
 
-### 4.4 Team Leader / Worker Layer
+### 5.4 Team Leader / Worker Layer
 
 对 Runtime 抽象完全透明：
 - 启动流程由 Runtime Adapter 负责，TeamLeader/Worker 本身无感知
@@ -221,7 +287,7 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 
 ---
 
-## 5. 项目结构调整
+## 6. 项目结构调整
 
 `runtime/` 作为根目录下的独立模块，与 `hiclaw-controller/` 并列，包含所有框架的 Adapter 实现：
 
@@ -248,7 +314,7 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 
 ---
 
-## 6. 接入新运行时的成本
+## 7. 接入新运行时的成本
 
 接入新的 Agent 框架只需两步：
 
@@ -259,7 +325,7 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 
 ---
 
-## 7. 关键设计决策
+## 8. 关键设计决策
 
 **Q1：AgentSpec 通过 MinIO 传递还是环境变量？**
 
@@ -275,7 +341,7 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 
 ---
 
-## 8. 与现有文档的关系
+## 9. 与现有文档的关系
 
 | 现有文档 | 关系 |
 |---------|------|
@@ -285,7 +351,7 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 
 ---
 
-## 9. 迁移路径
+## 10. 迁移路径
 
 | Phase | 内容 | 状态 |
 |-------|------|------|
