@@ -72,9 +72,10 @@ HiClaw 当前架构中，运行时选择（OpenClaw vs CoPaw）以硬编码方�
 
 **关键设计原则**：
 
-- Controller 只做通用基础设施操作（写 MinIO、注册 Matrix 账号、docker run），**不感知框架配置格式**
-- Runtime Adapter 与框架同语言，作为容器 entrypoint 的一部分，读取 AgentSpec 后自行完成框架初始化
+- Controller 只做通用基础设施操作（写 MinIO、注册通信账号、docker run），**不感知框架配置格式**
+- Runtime Adapter 与框架同语言，负责 Workspace 组织、Config 生成，以及**在框架内实现统一通信频道的接入**
 - AgentSpec 是 Controller 与 Runtime 之间唯一的数据契约，通过 MinIO 传递
+- 业务层（Manager/TeamLeader/Worker）使用统一通信抽象，不感知底层是 Matrix 还是其他 IM 系统
 
 ---
 
@@ -86,7 +87,7 @@ HiClaw 当前架构中，运行时选择（OpenClaw vs CoPaw）以硬编码方�
 
 | 要求 | 说明 |
 |------|------|
-| **通信** | 通过 Matrix 频道收发消息，支持 @mention 唤醒，遵守 HiClaw 通信协议（完成标记、NO_REPLY 语义等） |
+| **通信** | 通过统一通信频道收发消息，支持 @mention 唤醒，遵守 HiClaw 通信协议（完成标记、NO_REPLY 语义等）；当前实现为 Matrix，各 Runtime Adapter 负责在框架内接入该频道 |
 | **模型** | 通过 Higress AI Gateway 调用 LLM，凭证以 consumer key 方式注入，Agent 不直接持有上游 API key |
 | **技能** | 支持 HiClaw 标准技能格式：`skills/<name>/SKILL.md` + `skills/<name>/scripts/`，Manager 通过 MinIO 分发 |
 | **MCP 工具** | 通过 `config/mcporter.json` 配置 MCP Server 访问，调用方式为 mcporter CLI |
@@ -128,7 +129,7 @@ OpenClaw 和 CoPaw 对同一套逻辑文件有不同的物理布局期望，这�
 | skills/ | `<root>/skills/` | `.copaw/active_skills/`（先播种框架内置，再覆盖 MinIO 技能） |
 | memory/ | `<root>/memory/` | `.copaw/memory/` |
 | config/mcporter.json | `<root>/config/mcporter.json` | `.copaw/config/mcporter.json` |
-| Matrix 频道 | 内置插件，无需安装 | 需将 `matrix_channel.py` 安装至 `.copaw/custom_channels/` |
+| 通信频道接入 | 内置 Matrix 插件，Adapter 无需额外安装 | Adapter 需将 `matrix_channel.py` 安装至 `.copaw/custom_channels/`；未来接入其他频道同理 |
 | 模型凭证 | 内嵌 `openclaw.json` | 独立写入 `.copaw/.secret/providers.json` |
 | 会话状态 | `~/.openclaw/agents/` | `.copaw/sessions/` |
 
@@ -178,15 +179,14 @@ behavior:
 
 # ── 通信 ────────────────────────────────────────────────────────
 # Agent 与谁通信、通信边界
+# 业务层只描述 channel 类型和访问控制策略，不感知底层 IM 实现
+# 各 Runtime Adapter 负责在框架内接入对应频道
 communication:
-  channel: matrix
+  channel: matrix                           # 当前：matrix；未来可扩展 dingtalk / feishu 等
   dm:
-    allowFrom:
-      - "@admin:matrix.hiclaw.io"
+    allowFrom: [admin]                      # HiClaw 角色引用，Controller 解析为频道账号 ID
   group:
-    allowFrom:                              # 只响应以下用户的 @mention
-      - "@admin:matrix.hiclaw.io"
-      - "@manager:matrix.hiclaw.io"
+    allowFrom: [admin, manager]             # 只响应这些角色的 @mention
     requireMention: true
   historyLimit: 100                         # 启动时加载的历史消息条数
 
@@ -202,11 +202,16 @@ infra:
       maxTokens: 128000
       reasoning: true
       input: [text, image]
-  matrix:
+  channel:                                  # 频道凭证，由 Controller 注册账号后写入
+    type: matrix
     homeserver: http://matrix-local.hiclaw.io:18080
     accessToken: <Controller 注册 Matrix 账号后写入>
     userId: "@alice:matrix-local.hiclaw.io:18080"
     roomId: "!xxxxxx:matrix-local.hiclaw.io:18080"
+    # communication.allowFrom 角色引用的实际账号 ID 解析结果
+    resolvedUsers:
+      admin: "@admin:matrix-local.hiclaw.io:18080"
+      manager: "@manager:matrix-local.hiclaw.io:18080"
 ```
 
 与现有 Worker CRD 的层次关系：
@@ -214,7 +219,7 @@ infra:
 | | Worker CRD（用户声明） | AgentSpec（Controller 生成） |
 |---|---|---|
 | 用户填写 | model, runtime, skills, mcpServers, package | ← 直接继承，映射到 identity / capabilities |
-| Controller 注入 | — | infra.provider.apiKey、infra.matrix.accessToken、identity.instructions 内容 |
+| Controller 注入 | — | infra.provider.apiKey、infra.channel.accessToken、infra.channel.resolvedUsers、identity.instructions 内容 |
 | Runtime 消费 | — | 全部字段，转换为框架原生配置（openclaw.json / copaw config 等） |
 
 ---
@@ -235,13 +240,17 @@ infra:
 
 与 Controller 并列，位于根目录 `runtime/` 下，各框架用原生语言实现。每个 Adapter 的职责分为两部分：
 
-**① Workspace 组织**：按框架约定建立目录结构，将 HiClaw 标准逻辑布局映射到框架物理路径
+**① 通信频道接入**：在框架内实现 HiClaw 统一通信频道，使框架能够收发 HiClaw 的业务消息
+- OpenClaw：Matrix 为内置插件，Adapter 只需在 openclaw.json 中配置频道参数
+- CoPaw：框架本身无 Matrix 支持，Adapter 需将 `matrix_channel.py` 安装到 `custom_channels/`
+- 未来新框架：Adapter 同样负责将 HiClaw 的通信频道桥接进框架
+
+**② Workspace 组织**：按框架约定建立目录结构，将 HiClaw 标准逻辑布局映射到框架物理路径
 - 创建框架所需目录（`active_skills/`、`custom_channels/`、`.secret/` 等）
 - 复制 SOUL.md、AGENTS.md 到框架期望的位置
-- 安装框架特定组件（CoPaw 需安装 `matrix_channel.py` 到 `custom_channels/`）
 - 播种框架内置技能（CoPaw 需先初始化 `active_skills/`，再用 MinIO 技能覆盖）
 
-**② Config 生成**：将 AgentSpec 转换为框架原生配置文件
+**③ Config 生成**：将 AgentSpec 转换为框架原生配置文件
 - OpenClaw：生成 `openclaw.json`（channels、models、agents、session、plugins 各节）
 - CoPaw：生成 `config.json`（channels snake_case）+ `.secret/providers.json`（拆分模型凭证）
 
