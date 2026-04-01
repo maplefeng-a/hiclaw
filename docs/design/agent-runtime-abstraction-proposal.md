@@ -80,74 +80,86 @@ HiClaw 当前架构中，运行时选择（OpenClaw vs CoPaw）以硬编码方�
 
 ## 3. AgentSpec：跨层数据契约
 
-AgentSpec 是 Controller 生成、Runtime 消费的完备配置描述。它比 Worker CRD 更底层：Worker CRD 是用户面向的声明（只写业务关心的字段），AgentSpec 是 Controller reconcile 后注入全部运行时信息（Matrix 凭证、Gateway Key 等）的完整描述。
+AgentSpec 是 Controller 生成、Runtime Adapter 消费的完备 Agent 描述。它比 Worker CRD 更底层：Worker CRD 是用户面向的声明（只写业务关心的字段），AgentSpec 是 Controller reconcile 后的完整结果——不仅继承用户声明的字段，还注入了所有运行时所需的凭证和基础设施信息。
+
+AgentSpec 围绕"智能体"本身组织，分为四个 Agent 语义层和一个基础设施层：
 
 ```yaml
 # AgentSpec 示例：写入 MinIO agents/{name}/agent-spec.yaml
 name: alice
-image: hiclaw/worker-agent:latest   # 由 runtime 字段决定，Controller 填入
+runtime: openclaw
 
-# 模型：provider-id/model-id 复合键
-model: higress/claude-sonnet-4-6
+# ── 身份 ────────────────────────────────────────────────────────
+# Agent 是谁、遵循什么准则、携带什么知识
+identity:
+  soul: |
+    你是 Alice，一名资深全栈工程师，擅长 React 和 Go。
+    你只做被明确分配的任务，完成后主动汇报结果...
+  instructions: minio://agents/alice/AGENTS.md   # 工作指南（AGENTS.md），inline 或 MinIO URI
+  package: file://./alice-worker.zip             # 自定义技能包、领域知识库、自定义 AGENTS.md
 
-# Provider：Controller 从 Higress 获取 consumer key 后填入
-provider:
-  id: higress
-  baseUrl: http://aigw-local.hiclaw.io:8080/v1
-  apiKey: <higress-consumer-key>    # Controller reconcile 时从 Higress 申请后写入
-  model:
-    id: claude-sonnet-4-6
-    name: claude-sonnet-4-6
-    contextWindow: 1000000
-    maxTokens: 128000
-    reasoning: true
-    input: [text, image]
+# ── 能力 ────────────────────────────────────────────────────────
+# Agent 能调用哪些工具和技能
+capabilities:
+  model: claude-sonnet-4-6
+  skills:
+    - github-operations    # 代码仓库操作
+    - file-sync            # MinIO 文件同步
+  mcpServers:
+    - github               # GitHub MCP Server（通过 Higress 网关授权）
 
-# Matrix 频道：Controller 注册账号后填入凭证
-matrix:
-  homeserver: http://matrix-local.hiclaw.io:18080
-  accessToken: <matrix-access-token>  # Controller 注册账号后写入
-  encryption: false
+# ── 行为 ────────────────────────────────────────────────────────
+# Agent 的运作规则和节律
+behavior:
+  timeout: 30m             # 单次任务超时
+  maxConcurrent: 4         # 最大并发子任务数
+  session:
+    reset: daily           # 每日重置 session context，避免上下文污染
+    resetAtHour: 4
+  heartbeat:               # 仅 Manager / Team Leader 使用：主动周期检查
+    interval: 1h
+    prompt: "检查所有活跃任务的进展，向 Admin 汇报异常..."
+
+# ── 通信 ────────────────────────────────────────────────────────
+# Agent 与谁通信、通信边界
+communication:
+  channel: matrix
   dm:
     allowFrom:
-      - "@admin:matrix-local.hiclaw.io:18080"
-  groupAllowFrom:
-    - "@admin:matrix-local.hiclaw.io:18080"
-    - "@manager:matrix-local.hiclaw.io:18080"
-  historyLimit: 100
+      - "@admin:matrix.hiclaw.io"
+  group:
+    allowFrom:                              # 只响应以下用户的 @mention
+      - "@admin:matrix.hiclaw.io"
+      - "@manager:matrix.hiclaw.io"
+    requireMention: true
+  historyLimit: 100                         # 启动时加载的历史消息条数
 
-# Agent 行为
-behavior:
-  timeoutSeconds: 1800
-  maxConcurrent: 4
-  # heartbeat 仅 Manager / Team Leader 使用
-  heartbeat:
-    every: 1h
-    prompt: "检查所有活跃任务的进展..."
-
-# 身份文件（inline 内容或 MinIO URI，Controller 从 package 解析后写入）
-soul: |
-  你是 alice，一名全栈工程师...
-agents: minio://agents/alice/AGENTS.md
-
-# 技能与 MCP（名称列表，Controller 负责分发文件和配置 Higress 权限）
-skills:
-  - github-operations
-  - file-sync
-mcpServers:
-  - github
-
-# 自定义 package（Controller reconcile 时解压合并到 MinIO 空间）
-package: file://./alice-worker.zip
+# ── 基础设施（由 Controller reconcile 时注入，对业务层不可见）──
+infra:
+  image: hiclaw/worker-agent:latest
+  provider:
+    id: higress
+    baseUrl: http://aigw-local.hiclaw.io:8080/v1
+    apiKey: <Controller 从 Higress 为该 Agent 申请的 consumer key>
+    model:
+      contextWindow: 1000000
+      maxTokens: 128000
+      reasoning: true
+      input: [text, image]
+  matrix:
+    homeserver: http://matrix-local.hiclaw.io:18080
+    accessToken: <Controller 注册 Matrix 账号后写入>
+    userId: "@alice:matrix-local.hiclaw.io:18080"
+    roomId: "!xxxxxx:matrix-local.hiclaw.io:18080"
 ```
 
 与现有 Worker CRD 的层次关系：
 
-| 字段来源 | Worker CRD（用户声明） | AgentSpec（Controller 生成） |
-|---------|----------------------|---------------------------|
-| 用户填写 | model, runtime, skills, mcpServers, package | ← 直接继承 |
-| Controller 填入 | — | provider.apiKey、matrix.accessToken、soul/agents 内容、image |
-| Runtime 消费 | — | 全部字段，转换为框架原生配置 |
+| | Worker CRD（用户声明） | AgentSpec（Controller 生成） |
+|---|---|---|
+| 用户填写 | model, runtime, skills, mcpServers, package | ← 直接继承，映射到 identity / capabilities |
+| Controller 注入 | — | infra.provider.apiKey、infra.matrix.accessToken、identity.instructions 内容 |
+| Runtime 消费 | — | 全部字段，转换为框架原生配置（openclaw.json / copaw config 等） |
 
 ---
 
@@ -169,9 +181,9 @@ package: file://./alice-worker.zip
 
 | 运行时 | 位置 | 语言 | 职责 |
 |--------|------|------|------|
-| OpenClaw | `openclaw/src/adapter/` | Node.js | 读 AgentSpec → 生成 `openclaw.json` → 启动 OpenClaw |
-| CoPaw | `copaw/src/copaw_worker/bridge.py`（重构） | Python | 读 AgentSpec → 生成 `config.json` + `providers.json` → 启动 CoPaw |
-| 未来框架 | `<framework>/src/adapter/` | 框架原生语言 | 同上，只需实现本层逻辑 |
+| OpenClaw | `runtime/openclaw/` | Node.js | 读 AgentSpec → 生成 `openclaw.json` → 启动 OpenClaw |
+| CoPaw | `runtime/copaw/`（重构自 `copaw/bridge.py`） | Python | 读 AgentSpec → 生成 `config.json` + `providers.json` → 启动 CoPaw |
+| 未来框架 | `runtime/<framework>/` | 框架原生语言 | 同上，只需实现本层逻辑 |
 
 CoPaw 的 `bridge.py` 重构后输入从 `openclaw.json` 改为 `agent-spec.yaml`，消除 `patch_copaw_paths` hack——working_dir 通过正式启动参数传入，不再运行时修改模块常量。
 
@@ -211,23 +223,28 @@ Controller Reconciler → AgentSpec → 各框架 Runtime Adapter → 容器启�
 
 ## 5. 项目结构调整
 
+`runtime/` 作为根目录下的独立模块，与 `hiclaw-controller/` 并列，包含所有框架的 Adapter 实现：
+
 ```
-hiclaw-controller/
-├── internal/
-│   ├── runtime/              # 通用 Runtime 抽象（接口 + AgentSpec 定义 + Registry + 通用 Launcher）
-│   │   └── launcher.go       # 只含通用逻辑：写 MinIO + 注册 Matrix/Higress + docker run
-│   ├── controller/           # Reconciler（不变，改为通过 RuntimeRegistry 调用）
-│   └── ...
-
-openclaw/
-└── src/adapter/              # ★ 新增，Node.js 实现
-    └── index.js              # 读 agent-spec.yaml → openclaw.json → 启动 OpenClaw
-
-copaw/src/copaw_worker/
-└── bridge.py                 # ★ 重构：输入改为 agent-spec.yaml，消除 patch hack
+/
+├── hiclaw-controller/        # Controller（Go）：只含通用 Launcher，不含框架适配逻辑
+│   └── internal/
+│       ├── runtime/          # AgentRuntime 接口 + RuntimeRegistry + 通用 Launcher 定义
+│       └── controller/       # Reconciler（调用 RuntimeRegistry，不变）
+│
+├── runtime/                  # ★ 新增根目录模块：所有框架的 Runtime Adapter
+│   ├── openclaw/             # OpenClaw Adapter（Node.js）
+│   │   └── ...               # 读 agent-spec.yaml → openclaw.json → 启动 OpenClaw
+│   └── copaw/                # CoPaw Adapter（Python，重构自 copaw/bridge.py）
+│       └── ...               # 读 agent-spec.yaml → config.json + providers.json → 启动 CoPaw
+│
+├── manager/                  # Manager Agent（不变）
+├── worker/                   # OpenClaw Worker 容器基础镜像（不变）
+├── copaw/                    # CoPaw 容器（bridge.py 逻辑迁移到 runtime/copaw/ 后精简）
+└── ...
 ```
 
-Controller 侧 `internal/runtime/` 不再包含 openclaw/、copaw/ 子目录，各框架的配置生成逻辑归还给各框架自己。
+各 Adapter 作为各自框架容器的 entrypoint，在容器启动时从 MinIO 读取 `agent-spec.yaml`，完成框架原生初始化。Controller 侧不再包含任何框架特定的配置生成代码。
 
 ---
 
@@ -235,7 +252,7 @@ Controller 侧 `internal/runtime/` 不再包含 openclaw/、copaw/ 子目录，�
 
 接入新的 Agent 框架只需两步：
 
-1. 在框架目录用**框架原生语言**实现 entrypoint adapter：读取 `agent-spec.yaml` → 框架原生配置 → 启动框架
+1. 在 `runtime/<framework>/` 用**框架原生语言**实现 adapter：读取 `agent-spec.yaml` → 框架原生配置 → 启动框架
 2. 在 `hiclaw-controller` 注册一行：框架名称 + 容器镜像名称
 
 **Manager / TeamLeader / Worker / Controller Reconciler 均零修改。**
@@ -272,7 +289,7 @@ Controller 侧 `internal/runtime/` 不再包含 openclaw/、copaw/ 子目录，�
 
 | Phase | 内容 | 状态 |
 |-------|------|------|
-| 1 | 定义 AgentSpec 格式；Controller 生成 AgentSpec 写入 MinIO；OpenClaw entrypoint adapter（Node.js）读取并生成 openclaw.json；WorkerReconciler 切换为 RuntimeRegistry 调用 | 待开始 |
-| 2 | 重构 CoPaw bridge.py：输入改为 AgentSpec，消除 patch_copaw_paths hack；注册 CoPaw Launcher | 待开始 |
+| 1 | 定义 AgentSpec 格式；Controller 生成 AgentSpec 写入 MinIO；`runtime/openclaw/` Node.js adapter 读取并生成 openclaw.json；WorkerReconciler 切换为 RuntimeRegistry 调用 | 待开始 |
+| 2 | 创建 `runtime/copaw/`：重构 bridge.py，输入改为 AgentSpec，消除 patch_copaw_paths hack；注册 CoPaw Launcher | 待开始 |
 | 3 | Manager skill 解耦：worker/team-management 改为生成 YAML + hiclaw apply | 待开始 |
 | 4 | 清理旧代码（create-worker.sh runtime 分支、旧 bridge.py 逻辑）、更新文档 | 待开始 |
