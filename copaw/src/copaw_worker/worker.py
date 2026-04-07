@@ -262,11 +262,12 @@ class Worker:
         except asyncio.CancelledError:
             pass
         finally:
-            if hasattr(self, '_cron_manager') and self._cron_manager is not None:
+            if self._cron_manager is not None:
                 await self._cron_manager.stop()
             await self._channel_manager.stop_all()
             await self._runner.stop()
             # Clear refs so stop() doesn't double-call
+            self._cron_manager = None
             self._channel_manager = None
             self._runner = None
 
