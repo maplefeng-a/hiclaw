@@ -94,6 +94,9 @@ RUN python -m venv /opt/venv/lite \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /tmp/copaw-worker/
 
+# Add venv bin to PATH so copaw CLI is available (matches manager-copaw pattern)
+ENV PATH="/opt/venv/lite/bin:${PATH}"
+
 # ---------------------------------------------------------------------------
 # Patch installed packages in the lite venv to defer heavyweight modules that
 # copaw-worker headless mode never uses.  Total saving: ~170 MB RSS.
