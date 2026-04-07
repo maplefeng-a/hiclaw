@@ -4,17 +4,15 @@
 # Lightweight Python container for running CoPaw-based Worker Agents.
 # Uses the same MinIO-backed config/sync model as OpenClaw workers.
 #
-# Two runtime modes, each with its own isolated venv so they can carry
-# different versions of the copaw package:
+# Two runtime modes, each with its own isolated venv:
 #   - Standard mode (HICLAW_CONSOLE_PORT set): copaw from PyPI + copaw-worker
-#   - Lite mode (default, no console port):    copaw from GitHub fork + lite-copaw-worker
+#   - Lite mode (default, no console port):    copaw from PyPI + copaw-worker (with lazy loading patches)
 #
 # Build args:
 #   HIGRESS_REGISTRY  - base image registry for mc (MinIO Client)
 #   APT_MIRROR        - Debian mirror (default: mirrors.aliyun.com)
 #   PIP_INDEX_URL     - PyPI mirror (default: Aliyun)
-#   LITE_COPAW_REPO   - lite CoPaw git repo URL
-#   LITE_COPAW_COMMIT - lite CoPaw git commit hash
+#   COPAW_VERSION     - CoPaw version to install from PyPI (default: 1.0.0)
 # ============================================================
 
 ARG HIGRESS_REGISTRY=higress-registry.cn-hangzhou.cr.aliyuncs.com
@@ -27,8 +25,7 @@ FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 
 ARG APT_MIRROR=mirrors.aliyun.com
 ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
-ARG LITE_COPAW_REPO=https://github.com/johnlanni/CoPaw
-ARG LITE_COPAW_COMMIT=212405a30380bc319b02397c166d5296029c89b8
+ARG COPAW_VERSION=1.0.0
 
 # python:3.11-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources
 RUN if [ -n "${APT_MIRROR}" ]; then \
@@ -64,11 +61,6 @@ RUN npm config set registry ${NPM_REGISTRY} && \
     npm install -g mcporter skills @nacos-group/cli && \
     rm -rf /root/.npm
 
-# Download lite CoPaw source archive from GitHub
-RUN curl -fsSL "${LITE_COPAW_REPO}/archive/${LITE_COPAW_COMMIT}.tar.gz" \
-        | tar xz -C /tmp \
-    && mv /tmp/CoPaw-${LITE_COPAW_COMMIT} /tmp/lite-copaw
-
 # Stage copaw-worker dependency metadata only (src/ copied later for layer caching).
 # A minimal __init__.py placeholder lets pip resolve the package without the real source,
 # so that dependency-heavy venv layers (~2 GB) are rebuilt only when pyproject.toml changes.
@@ -83,12 +75,12 @@ RUN python -m venv /opt/venv/standard \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
         /tmp/copaw-worker/
 
-# --- Lite venv: copaw from GitHub fork ---
+# --- Lite venv: copaw from PyPI (with lazy loading patches) ---
 RUN python -m venv /opt/venv/lite \
     && /opt/venv/lite/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
-        /tmp/lite-copaw/ \
+        "copaw==${COPAW_VERSION}" \
     && /opt/venv/lite/bin/pip install --no-cache-dir \
         --index-url "${PIP_INDEX_URL}" \
         --trusted-host "$(echo ${PIP_INDEX_URL} | sed 's|https\?://||;s|/.*||')" \
@@ -124,7 +116,7 @@ RUN STANDARD_SITE=/opt/venv/standard/lib/python3.11/site-packages/copaw_worker \
     && LITE_SITE=/opt/venv/lite/lib/python3.11/site-packages/copaw_worker \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$STANDARD_SITE/" \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$LITE_SITE/" \
-    && rm -rf /tmp/copaw-worker/ /tmp/lite-copaw/
+    && rm -rf /tmp/copaw-worker/
 
 # copaw-sync wrapper
 RUN printf '#!/bin/bash\nexec python3 "/root/.copaw-worker/${HICLAW_WORKER_NAME}/skills/file-sync/scripts/copaw-sync.py" "$@"\n' \
