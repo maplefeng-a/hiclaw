@@ -2269,6 +2269,9 @@ HICLAW_COPAW_WORKER_IMAGE=${COPAW_WORKER_IMAGE}
 # Default Worker runtime (openclaw | copaw)
 HICLAW_DEFAULT_WORKER_RUNTIME=${HICLAW_DEFAULT_WORKER_RUNTIME:-openclaw}
 
+# CoPaw Worker console port (empty = headless mode; e.g. 8088)
+HICLAW_CONSOLE_PORT=${HICLAW_CONSOLE_PORT:-}
+
 # Matrix E2EE (0=disabled, 1=enabled; default: 0)
 HICLAW_MATRIX_E2EE=${HICLAW_MATRIX_E2EE:-0}
 
