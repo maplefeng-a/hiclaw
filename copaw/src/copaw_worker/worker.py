@@ -37,6 +37,7 @@ class Worker:
         self._copaw_working_dir: Optional[Path] = None
         self._runner = None
         self._channel_manager = None
+        self._cron_manager = None
 
     # ------------------------------------------------------------------
     # Public API
@@ -54,6 +55,11 @@ class Worker:
 
     async def stop(self) -> None:
         console.print("[yellow]Stopping worker...[/yellow]")
+        if self._cron_manager is not None:
+            try:
+                await self._cron_manager.stop()
+            except Exception:
+                pass
         if self._channel_manager is not None:
             try:
                 await self._channel_manager.stop_all()
@@ -214,12 +220,14 @@ class Worker:
             server.should_exit = True
 
     async def _run_copaw_headless(self) -> None:
-        """Start CoPaw's AgentRunner + ChannelManager (no HTTP server)."""
+        """Start CoPaw's AgentRunner + ChannelManager + CronManager (no HTTP server)."""
         from copaw.app.runner.runner import AgentRunner
-        from copaw.config.utils import load_config
+        from copaw.config.utils import load_config, get_jobs_path
         from copaw.app.channels.manager import ChannelManager
         from copaw.app.channels.utils import make_process_from_runner
         from copaw.app.channels.registry import clear_builtin_channel_cache
+        from copaw.app.crons.manager import CronManager
+        from copaw.app.crons.repo.json_repo import JsonJobRepository
 
         # Force registry reload so newly installed matrix_channel.py is picked up
         clear_builtin_channel_cache()
@@ -236,6 +244,16 @@ class Worker:
         )
         await self._channel_manager.start_all()
 
+        # Initialize and start CronManager for scheduled tasks
+        repo = JsonJobRepository(get_jobs_path())
+        self._cron_manager = CronManager(
+            repo=repo,
+            runner=self._runner,
+            channel_manager=self._channel_manager,
+            timezone="UTC",
+        )
+        await self._cron_manager.start()
+
         console.print("[bold green]CoPaw channels started. Worker is running.[/bold green]")
 
         try:
@@ -244,6 +262,8 @@ class Worker:
         except asyncio.CancelledError:
             pass
         finally:
+            if hasattr(self, '_cron_manager') and self._cron_manager is not None:
+                await self._cron_manager.stop()
             await self._channel_manager.stop_all()
             await self._runner.stop()
             # Clear refs so stop() doesn't double-call
