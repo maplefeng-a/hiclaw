@@ -127,6 +127,14 @@ type WorkerEnvDefaults struct {
 	MatrixURL     string
 	AdminUser     string
 	Runtime       string // "docker" for embedded, "k8s" for incluster
+
+	// CMS observability (propagated to all workers and managers)
+	CMSTracesEnabled  bool
+	CMSMetricsEnabled bool
+	CMSEndpoint       string
+	CMSLicenseKey     string
+	CMSProject        string
+	CMSWorkspace      string
 }
 
 type managerSpecEnv struct {
@@ -242,6 +250,14 @@ func LoadConfig() *Config {
 			AIGatewayURL:  envOrDefault("HICLAW_AI_GATEWAY_URL", "http://aigw-local.hiclaw.io:8080"),
 			MatrixURL:     envOrDefault("HICLAW_MATRIX_URL", "http://matrix-local.hiclaw.io:8080"),
 			AdminUser:     envOrDefault("HICLAW_ADMIN_USER", "admin"),
+
+			// CMS observability (propagated from controller env to all workers/managers)
+			CMSTracesEnabled:  envBool("HICLAW_CMS_TRACES_ENABLED"),
+			CMSMetricsEnabled: envBool("HICLAW_CMS_METRICS_ENABLED"),
+			CMSEndpoint:       os.Getenv("HICLAW_CMS_ENDPOINT"),
+			CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
+			CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
+			CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
 		},
 	}
 
