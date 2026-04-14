@@ -301,7 +301,7 @@ for i in "${!WORKER_NAMES[@]}"; do
     w_mcp="${WORKER_MCP_ARR[$i]:-}"
     log "  Creating worker: ${w_name}..."
 
-    W_ARGS=(--name "${w_name}" --role worker --team "${TEAM_NAME}" --team-leader "${LEADER_NAME}" --runtime copaw)
+    W_ARGS=(--name "${w_name}" --role worker --team "${TEAM_NAME}" --team-leader "${LEADER_NAME}" --runtime copaw --console-port 8088)
     if [ -n "${w_model}" ]; then
         W_ARGS+=(--model "${w_model}")
     fi

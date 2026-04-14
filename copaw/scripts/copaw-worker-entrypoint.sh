@@ -7,7 +7,6 @@
 #   HICLAW_FS_ENDPOINT   - MinIO endpoint (required in local mode)
 #   HICLAW_FS_ACCESS_KEY - MinIO access key (required in local mode)
 #   HICLAW_FS_SECRET_KEY - MinIO secret key (required in local mode)
-#   HICLAW_CONSOLE_PORT  - CoPaw web console port (optional)
 #   HICLAW_RUNTIME       - "aliyun" for cloud mode (uses RRSA/STS via hiclaw-env.sh)
 #   TZ                   - Timezone (optional)
 
@@ -18,8 +17,6 @@ source /opt/hiclaw/scripts/lib/hiclaw-env.sh 2>/dev/null || true
 
 WORKER_NAME="${HICLAW_WORKER_NAME:?HICLAW_WORKER_NAME is required}"
 INSTALL_DIR="/root/.hiclaw-worker"
-CONSOLE_PORT="${HICLAW_CONSOLE_PORT:-}"
-VENV="/opt/venv/copaw"
 
 log() {
     echo "[hiclaw-copaw-worker $(date '+%Y-%m-%d %H:%M:%S')] $1"
@@ -89,29 +86,34 @@ _start_readiness_reporter() {
     log "Background readiness reporter started (PID: $!)"
 }
 
+VENV="/opt/venv/copaw"
 log "Starting copaw-worker: ${WORKER_NAME}"
 log "  FS endpoint: ${FS_ENDPOINT}"
 log "  Install dir: ${INSTALL_DIR}"
 log "  CoPaw venv: ${VENV}"
-[ -n "${CONSOLE_PORT}" ] && log "  Console port: ${CONSOLE_PORT}"
+
+# Set COPAW_WORKING_DIR before starting (read by copaw.constant at import time)
+export COPAW_WORKING_DIR="${INSTALL_DIR}/${WORKER_NAME}/.hiclaw-worker"
+
+# Enable debug logging for troubleshooting
+export COPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-debug}"
+
+# Console port (default 8088, can be overridden via HICLAW_CONSOLE_PORT)
+CONSOLE_PORT="${HICLAW_CONSOLE_PORT:-8088}"
+
+# Build command
+CMD_ARGS=(
+    --name "${WORKER_NAME}"
+    --fs "${FS_ENDPOINT}"
+    --fs-key "${FS_ACCESS_KEY}"
+    --fs-secret "${FS_SECRET_KEY}"
+    --fs-bucket "${FS_BUCKET}"
+    --install-dir "${INSTALL_DIR}"
+    --console-port "${CONSOLE_PORT}"
+)
+
+log "  Console port: ${CONSOLE_PORT}"
 
 _start_readiness_reporter
 
-if [ -n "${CONSOLE_PORT}" ]; then
-    exec "${VENV}/bin/copaw-worker" \
-        --name "${WORKER_NAME}" \
-        --fs "${FS_ENDPOINT}" \
-        --fs-key "${FS_ACCESS_KEY}" \
-        --fs-secret "${FS_SECRET_KEY}" \
-        --fs-bucket "${FS_BUCKET}" \
-        --install-dir "${INSTALL_DIR}" \
-        --console-port "${CONSOLE_PORT}"
-else
-    exec "${VENV}/bin/copaw-worker" \
-        --name "${WORKER_NAME}" \
-        --fs "${FS_ENDPOINT}" \
-        --fs-key "${FS_ACCESS_KEY}" \
-        --fs-secret "${FS_SECRET_KEY}" \
-        --fs-bucket "${FS_BUCKET}" \
-        --install-dir "${INSTALL_DIR}"
-fi
+exec "${VENV}/bin/copaw-worker" "${CMD_ARGS[@]}"

@@ -54,16 +54,8 @@ class Worker:
 
     async def stop(self) -> None:
         console.print("[yellow]Stopping worker...[/yellow]")
-        if self._channel_manager is not None:
-            try:
-                await self._channel_manager.stop_all()
-            except Exception:
-                pass
-        if self._runner is not None:
-            try:
-                await self._runner.stop()
-            except Exception:
-                pass
+        # When running via FastAPI app, runner and channel_manager are managed
+        # by the app lifecycle, not directly by Worker instance
         console.print("[green]Worker stopped.[/green]")
 
     # ------------------------------------------------------------------
@@ -165,16 +157,9 @@ class Worker:
         asyncio.create_task(push_loop(self.sync, check_interval=5))
 
         console.print("[bold green]Worker initialized.[/bold green]")
-        if self.config.console_port:
-            console.print(
-                f"[dim]Note: web console enabled on port {self.config.console_port} "
-                f"(~500MB extra RAM). Remove --console-port to save memory.[/dim]"
-            )
-        else:
-            console.print(
-                "[dim]Tip: add --console-port 8088 to enable the web console "
-                "(costs ~500MB extra RAM).[/dim]"
-            )
+        console.print(
+            f"[dim]Web console will start on port {self.config.console_port}[/dim]"
+        )
         return True
 
     # ------------------------------------------------------------------
@@ -182,16 +167,7 @@ class Worker:
     # ------------------------------------------------------------------
 
     async def _run_copaw(self) -> None:
-        """Start CoPaw. If console_port is set, run the full FastAPI app via
-        uvicorn (gives access to the web console). Otherwise start the runner
-        and channel manager directly (lightweight, no HTTP server)."""
-        if self.config.console_port:
-            await self._run_copaw_with_console(self.config.console_port)
-        else:
-            await self._run_copaw_headless()
-
-    async def _run_copaw_with_console(self, port: int) -> None:
-        """Run CoPaw's full FastAPI app (runner + channels + web console)."""
+        """Start CoPaw via FastAPI app (includes runner + channels + web console)."""
         import uvicorn
         from copaw.app.channels.registry import clear_builtin_channel_cache
 
@@ -200,55 +176,18 @@ class Worker:
         uv_config = uvicorn.Config(
             "copaw.app._app:app",
             host="0.0.0.0",
-            port=port,
+            port=self.config.console_port,
             log_level="info",
         )
         server = uvicorn.Server(uv_config)
         console.print(
             f"[bold green]CoPaw console available at "
-            f"http://127.0.0.1:{port}/[/bold green]"
+            f"http://127.0.0.1:{self.config.console_port}/[/bold green]"
         )
         try:
             await server.serve()
         except asyncio.CancelledError:
             server.should_exit = True
-
-    async def _run_copaw_headless(self) -> None:
-        """Start CoPaw's AgentRunner + ChannelManager (no HTTP server)."""
-        from copaw.app.runner.runner import AgentRunner
-        from copaw.config.utils import load_config
-        from copaw.app.channels.manager import ChannelManager
-        from copaw.app.channels.utils import make_process_from_runner
-        from copaw.app.channels.registry import clear_builtin_channel_cache
-
-        # Force registry reload so newly installed matrix_channel.py is picked up
-        clear_builtin_channel_cache()
-
-        self._runner = AgentRunner()
-        await self._runner.start()
-
-        # load_config reads COPAW_WORKING_DIR/config.json (set by bridge.py)
-        config = load_config()
-        self._channel_manager = ChannelManager.from_config(
-            process=make_process_from_runner(self._runner),
-            config=config,
-            on_last_dispatch=None,
-        )
-        await self._channel_manager.start_all()
-
-        console.print("[bold green]CoPaw channels started. Worker is running.[/bold green]")
-
-        try:
-            while True:
-                await asyncio.sleep(60)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await self._channel_manager.stop_all()
-            await self._runner.stop()
-            # Clear refs so stop() doesn't double-call
-            self._channel_manager = None
-            self._runner = None
 
     # ------------------------------------------------------------------
     # Matrix re-login (E2EE device_id refresh)
