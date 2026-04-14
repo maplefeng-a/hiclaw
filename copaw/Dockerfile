@@ -97,6 +97,9 @@ RUN SITE=/opt/venv/copaw/lib/python3.11/site-packages \
     && cp -a /tmp/copaw-worker/src/matrix "$SITE/copaw/app/channels/" \
     && rm -rf /tmp/copaw-worker/
 
+# copaw CLI symlink (make it available in PATH for skills)
+RUN ln -sf /opt/venv/copaw/bin/copaw /usr/local/bin/copaw
+
 # copaw-sync wrapper
 RUN printf '#!/bin/bash\nexec python3 "/root/.hiclaw-worker/${HICLAW_WORKER_NAME}/skills/file-sync/scripts/copaw-sync.py" "$@"\n' \
     > /usr/local/bin/copaw-sync && chmod +x /usr/local/bin/copaw-sync
