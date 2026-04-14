@@ -145,6 +145,9 @@ build-manager-copaw: build-hiclaw-controller ## Build Manager CoPaw image (Pytho
 	@echo "==> Building Manager CoPaw image: $(LOCAL_MANAGER_COPAW) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(BUILTIN_VERSION_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg APT_MIRROR=mirrors.aliyun.com \
+		--build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+		--build-arg NPM_REGISTRY=https://registry.npmmirror.com/ \
 		-f manager/Dockerfile.copaw \
 		-t $(LOCAL_MANAGER_COPAW) \
 		.
@@ -153,6 +156,7 @@ build-embedded: build-hiclaw-controller ## Build embedded all-in-one controller 
 	@echo "==> Building embedded image: $(LOCAL_EMBEDDED) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(DOCKER_BUILD_ARGS) \
 		--build-arg HICLAW_CONTROLLER_IMAGE=$(LOCAL_CONTROLLER) \
+		--build-arg APT_MIRROR=mirrors.aliyun.com \
 		-f hiclaw-controller/Dockerfile.embedded \
 		-t $(LOCAL_EMBEDDED) \
 		.
@@ -166,6 +170,9 @@ build-worker: ## Build Worker image
 build-copaw-worker: ## Build CoPaw Worker image
 	@echo "==> Building CoPaw Worker image: $(LOCAL_COPAW_WORKER) (registry: $(HIGRESS_REGISTRY))"
 	docker build $(PLATFORM_FLAG) $(REGISTRY_ARG) $(SHARED_LIB_CTX) $(DOCKER_BUILD_ARGS) \
+		--build-arg APT_MIRROR=mirrors.aliyun.com \
+		--build-arg PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/ \
+		--build-arg NPM_REGISTRY=https://registry.npmmirror.com/ \
 		-t $(LOCAL_COPAW_WORKER) \
 		./copaw/
 

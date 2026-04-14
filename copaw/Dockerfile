@@ -56,8 +56,8 @@ COPY --from=hiclaw-controller /usr/local/bin/hiclaw /usr/local/bin/hiclaw
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 # Install Node.js 22 for shared Worker CLIs
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
-    apt-get install -y --no-install-recommends nodejs && \
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends nodejs npm && \
     rm -rf /var/lib/apt/lists/*
 
 RUN npm config set registry ${NPM_REGISTRY} && \
@@ -69,10 +69,8 @@ RUN npm config set registry ${NPM_REGISTRY} && \
 # so that dependency-heavy venv layers (~2 GB) are rebuilt only when pyproject.toml changes.
 COPY pyproject.toml README.md /tmp/copaw-worker/
 RUN mkdir -p /tmp/copaw-worker/src/copaw_worker \
-    && mkdir -p /tmp/copaw-worker/src/openclaw2copaw \
     && mkdir -p /tmp/copaw-worker/src/matrix \
     && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/copaw_worker/__init__.py \
-    && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/openclaw2copaw/__init__.py \
     && echo '__version__ = "0.0.0"' > /tmp/copaw-worker/src/matrix/__init__.py
 
 # --- Single venv: copaw from PyPI + copaw-worker + CMS plugin ---
@@ -99,7 +97,6 @@ RUN python -m venv /opt/venv/copaw \
 COPY src/ /tmp/copaw-worker/src/
 RUN SITE=/opt/venv/copaw/lib/python3.11/site-packages \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
-    && cp -a /tmp/copaw-worker/src/openclaw2copaw/* "$SITE/openclaw2copaw/" \
     && rm -rf "$SITE/copaw/app/channels/matrix" \
     && cp -a /tmp/copaw-worker/src/matrix "$SITE/copaw/app/channels/" \
     && rm -rf /tmp/copaw-worker/
