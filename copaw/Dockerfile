@@ -99,6 +99,9 @@ RUN SITE=/opt/venv/copaw/lib/python3.11/site-packages \
     && cp -a /tmp/copaw-worker/src/copaw_worker/* "$SITE/copaw_worker/" \
     && rm -rf "$SITE/copaw/app/channels/matrix" \
     && cp -a /tmp/copaw-worker/src/matrix "$SITE/copaw/app/channels/" \
+    && if [ -f /tmp/copaw-worker/src/matrix/config.py ]; then \
+         cp /tmp/copaw-worker/src/matrix/config.py "$SITE/copaw/config/config.py"; \
+       fi \
     && rm -rf /tmp/copaw-worker/
 
 # copaw CLI symlink (make it available in PATH for skills)
