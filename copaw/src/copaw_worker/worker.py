@@ -446,19 +446,13 @@ class Worker:
     # ------------------------------------------------------------------
 
     def _install_matrix_channel(self) -> None:
-        """Copy matrix_channel.py into COPAW_WORKING_DIR/custom_channels/.
+        """Matrix channel is now installed via overlay in Dockerfile.
 
-        CoPaw's CUSTOM_CHANNELS_DIR = WORKING_DIR / "custom_channels", and
-        WORKING_DIR is read from COPAW_WORKING_DIR env var at import time.
-        We set COPAW_WORKING_DIR in bridge.py before this runs, so the
-        directory is already correct.
+        CoPaw 1.0.2+ uses the Matrix overlay module installed at build time
+        (copaw/src/matrix/ → site-packages/copaw/app/channels/matrix/).
+        This method is kept as a no-op for compatibility.
         """
-        custom_channels_dir = self._copaw_working_dir / "custom_channels"
-        custom_channels_dir.mkdir(parents=True, exist_ok=True)
-        src = Path(__file__).parent / "matrix_channel.py"
-        dst = custom_channels_dir / "matrix_channel.py"
-        shutil.copy2(src, dst)
-        logger.debug("MatrixChannel installed to %s", dst)
+        logger.debug("Matrix channel already installed via overlay module")
 
     # ------------------------------------------------------------------
     # mcporter config
