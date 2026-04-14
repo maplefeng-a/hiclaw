@@ -164,7 +164,7 @@ _obtain_team_admin_token "${TEAM_ADMIN}"
 
 # ============================================================
 # Step 1: Create Team Room and Leader DM (empty — members invited later)
-# Rooms are created first so room IDs can be passed to create-worker.sh,
+# Rooms are created first so room IDs can be passed to hiclaw create worker,
 # ensuring Leader's AGENTS.md has full team-context from the start.
 # ============================================================
 log "Step 1: Creating Team Room and Leader DM..."
@@ -227,22 +227,12 @@ else
 fi
 
 # ============================================================
-# Step 2: Create Team Leader (with room IDs for AGENTS.md team-context)
+# Step 2: Create Team Leader
 # ============================================================
 log "Step 2: Creating Team Leader (${LEADER_NAME})..."
 LEADER_ARGS=(--name "${LEADER_NAME}" --role team_leader --team "${TEAM_NAME}" --runtime copaw)
 if [ -n "${LEADER_MODEL}" ]; then
     LEADER_ARGS+=(--model "${LEADER_MODEL}")
-fi
-if [ -n "${TEAM_ADMIN_MID}" ]; then
-    LEADER_ARGS+=(--team-admin-matrix-id "${TEAM_ADMIN_MID}")
-fi
-# Pass pre-created room IDs so Leader's AGENTS.md gets full team-context
-if [ -n "${TEAM_ROOM_ID}" ]; then
-    LEADER_ARGS+=(--team-room-id "${TEAM_ROOM_ID}")
-fi
-if [ -n "${LEADER_DM_ROOM_ID}" ]; then
-    LEADER_ARGS+=(--leader-dm-room-id "${LEADER_DM_ROOM_ID}")
 fi
 # Build channel policy: include all workers + Team Admin in groupAllowExtra
 # so Leader's groupAllowFrom is correct from the start (no post-hoc patching)
@@ -276,9 +266,14 @@ if [ -n "${LEADER_MERGED_POLICY}" ] && [ "${LEADER_MERGED_POLICY}" != "{}" ]; th
 fi
 
 log "  Leader channel-policy: ${LEADER_MERGED_POLICY:-none}"
-LEADER_RESULT=$(bash /opt/hiclaw/agent/skills/worker-management/scripts/create-worker.sh "${LEADER_ARGS[@]}" 2>&1)
-LEADER_JSON=$(echo "${LEADER_RESULT}" | sed -n '/---RESULT---/,$ p' | tail -n +2)
-LEADER_ROOM_ID=$(echo "${LEADER_JSON}" | jq -r '.room_id // empty')
+LEADER_RESULT=$(hiclaw create worker "${LEADER_ARGS[@]}" -o json 2>&1)
+if [ $? -ne 0 ]; then
+    log "  ERROR: Failed to create leader"
+    log "  Result: ${LEADER_RESULT}"
+    exit 1
+fi
+LEADER_JSON="${LEADER_RESULT}"
+LEADER_ROOM_ID=$(echo "${LEADER_JSON}" | jq -r '.roomID // .room_id // empty')
 
 if [ -z "${LEADER_ROOM_ID}" ]; then
     log "  WARNING: Could not extract leader room_id from result"
@@ -301,7 +296,7 @@ for i in "${!WORKER_NAMES[@]}"; do
     w_mcp="${WORKER_MCP_ARR[$i]:-}"
     log "  Creating worker: ${w_name}..."
 
-    W_ARGS=(--name "${w_name}" --role worker --team "${TEAM_NAME}" --team-leader "${LEADER_NAME}" --runtime copaw --console-port 8088)
+    W_ARGS=(--name "${w_name}" --role worker --team "${TEAM_NAME}" --team-leader "${LEADER_NAME}" --runtime copaw)
     if [ -n "${w_model}" ]; then
         W_ARGS+=(--model "${w_model}")
     fi
@@ -310,9 +305,6 @@ for i in "${!WORKER_NAMES[@]}"; do
     fi
     if [ -n "${w_mcp}" ]; then
         W_ARGS+=(--mcp-servers "${w_mcp}")
-    fi
-    if [ -n "${TEAM_ADMIN_MID}" ]; then
-        W_ARGS+=(--team-admin-matrix-id "${TEAM_ADMIN_MID}")
     fi
     # Build channel policy: include Team Admin + peer workers in groupAllowExtra
     # so worker's groupAllowFrom is correct from the start
@@ -346,9 +338,14 @@ for i in "${!WORKER_NAMES[@]}"; do
         W_ARGS+=(--channel-policy "${W_MERGED_POLICY}")
     fi
 
-    W_RESULT=$(bash /opt/hiclaw/agent/skills/worker-management/scripts/create-worker.sh "${W_ARGS[@]}" 2>&1)
-    W_JSON=$(echo "${W_RESULT}" | sed -n '/---RESULT---/,$ p' | tail -n +2)
-    W_ROOM_ID=$(echo "${W_JSON}" | jq -r '.room_id // empty')
+    W_RESULT=$(hiclaw create worker "${W_ARGS[@]}" -o json 2>&1)
+    if [ $? -ne 0 ]; then
+        log "  ERROR: Failed to create worker ${w_name}"
+        log "  Result: ${W_RESULT}"
+        continue
+    fi
+    W_JSON="${W_RESULT}"
+    W_ROOM_ID=$(echo "${W_JSON}" | jq -r '.roomID // .room_id // empty')
     WORKER_ROOM_IDS+=("${W_ROOM_ID}")
     log "  Worker ${w_name} created: room=${W_ROOM_ID}"
 done

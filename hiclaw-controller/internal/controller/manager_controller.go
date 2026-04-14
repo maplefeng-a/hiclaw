@@ -179,7 +179,7 @@ func (r *ManagerReconciler) handleCreate(ctx context.Context, m *v1beta1.Manager
 				createReq.AuthToken = token
 			}
 
-			// Embedded (Docker) mode: inject host volume mounts and extra env
+			// Embedded (Docker) mode: inject host volume mounts, port mappings, and extra env
 			if wb.Name() == "docker" && r.EmbeddedConfig != nil {
 				if r.EmbeddedConfig.WorkspaceDir != "" {
 					createReq.Volumes = append(createReq.Volumes, backend.VolumeMount{
@@ -193,6 +193,13 @@ func (r *ManagerReconciler) handleCreate(ctx context.Context, m *v1beta1.Manager
 						ContainerPath: "/host-share",
 					})
 				}
+				// Map Manager API port to host
+				createReq.Ports = append(createReq.Ports, backend.PortMapping{
+					HostIP:        "127.0.0.1",
+					HostPort:      "18799",
+					ContainerPort: "18799",
+					Protocol:      "tcp",
+				})
 				createReq.RestartPolicy = "unless-stopped"
 				for k, v := range r.EmbeddedConfig.ExtraEnv {
 					if _, exists := createReq.Env[k]; !exists {

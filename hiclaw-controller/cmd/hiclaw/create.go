@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -29,22 +30,24 @@ func createCmd() *cobra.Command {
 
 func createWorkerCmd() *cobra.Command {
 	var (
-		name        string
-		model       string
-		runtime     string
-		image       string
-		identity    string
-		soul        string
-		soulFile    string
-		skills      string
-		mcpServers  string
-		packageURI  string
-		expose      string
-		team        string
-		role        string
-		outputFmt   string
-		noWait      bool
-		waitTimeout time.Duration
+		name          string
+		model         string
+		runtime       string
+		image         string
+		identity      string
+		soul          string
+		soulFile      string
+		skills        string
+		mcpServers    string
+		packageURI    string
+		expose        string
+		team          string
+		teamLeader    string
+		role          string
+		channelPolicy string
+		noWait        bool
+		waitTimeout   time.Duration
+		outputFmt     string
 	)
 
 	cmd := &cobra.Command{
@@ -91,6 +94,7 @@ func createWorkerCmd() *cobra.Command {
 			setIfNotEmpty(req, "soul", soul)
 			setIfNotEmpty(req, "package", packageURI)
 			setIfNotEmpty(req, "team", team)
+			setIfNotEmpty(req, "teamLeader", teamLeader)
 			setIfNotEmpty(req, "role", role)
 			if skills != "" {
 				req["skills"] = splitCSV(skills)
@@ -100,6 +104,14 @@ func createWorkerCmd() *cobra.Command {
 			}
 			if expose != "" {
 				req["expose"] = parseExposePorts(expose)
+			}
+			if channelPolicy != "" {
+				// Parse JSON channel policy
+				var policy map[string]interface{}
+				if err := json.Unmarshal([]byte(channelPolicy), &policy); err != nil {
+					return fmt.Errorf("invalid --channel-policy JSON: %w", err)
+				}
+				req["channelPolicy"] = policy
 			}
 
 			client := NewAPIClient()
@@ -143,7 +155,9 @@ func createWorkerCmd() *cobra.Command {
 	cmd.Flags().StringVar(&packageURI, "package", "", "Package URI (nacos://, http://, oss://) or shorthand")
 	cmd.Flags().StringVar(&expose, "expose", "", "Comma-separated ports to expose (e.g. 8080,3000)")
 	cmd.Flags().StringVar(&team, "team", "", "Team name (assigns worker to a team)")
+	cmd.Flags().StringVar(&teamLeader, "team-leader", "", "Team leader name (for team workers)")
 	cmd.Flags().StringVar(&role, "role", "", "Role within team (team_leader|worker)")
+	cmd.Flags().StringVar(&channelPolicy, "channel-policy", "", "Channel policy JSON string")
 	cmd.Flags().StringVarP(&outputFmt, "output", "o", "", "Output format (json)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "Return after the Worker CR is created instead of waiting for runtime readiness")
 	cmd.Flags().DurationVar(&waitTimeout, "wait-timeout", 3*time.Minute, "Maximum time to wait for the Worker to report Ready")
