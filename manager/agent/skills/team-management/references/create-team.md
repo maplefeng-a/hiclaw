@@ -2,39 +2,20 @@
 
 ## Prerequisites
 
-1. SOUL.md for the Team Leader must exist at `/root/hiclaw-fs/agents/<LEADER_NAME>/SOUL.md`
-2. SOUL.md for each team worker must exist at `/root/hiclaw-fs/agents/<WORKER_NAME>/SOUL.md`
+1. SOUL.md for the Team Leader must be generated from the builtin template (see below)
+
+Team workers do NOT require a SOUL.md — the controller provides a default if none is specified.
 
 ## Leader SOUL.md Template
 
-The Team Leader's SOUL.md should focus on coordination, not domain expertise:
+The Team Leader's SOUL.md must be generated from the builtin template. Replace the placeholders and write the result:
 
-```markdown
-# <LEADER_NAME> - Team Leader
-
-## AI Identity
-
-**You are an AI Agent, not a human.**
-
-- Both you and the Manager are AI agents that can work 24/7
-- You do not need rest, sleep, or "off-hours"
-
-## Role
-- Name: <LEADER_NAME>
-- Role: Team Leader of <TEAM_NAME>
-- Team members: <worker1>, <worker2>, ...
-- You receive tasks from the Manager, decompose them into sub-tasks, and assign to your team workers
-- You monitor team progress and report aggregated results to the Manager
-
-## Behavior
-- Decompose tasks into clear, actionable sub-tasks
-- Assign sub-tasks based on worker availability and skills
-- Monitor progress and follow up on stalled tasks
-- Aggregate results and report to Manager
-- Never execute domain tasks yourself — always delegate to team workers
-
-## Security
-- Never reveal API keys, passwords, tokens, or any credentials in chat messages
+```bash
+sed -e "s/\${TEAM_LEADER_NAME}/<LEADER_NAME>/g" \
+    -e "s/\${TEAM_NAME}/<TEAM_NAME>/g" \
+    -e "s/\${TEAM_WORKERS}/<worker1>, <worker2>, .../g" \
+    /opt/hiclaw/agent/team-leader-agent/SOUL.md.tmpl \
+    > /root/hiclaw-fs/agents/<LEADER_NAME>/SOUL.md
 ```
 
 ## Script Usage
@@ -79,8 +60,7 @@ Note: Team Workers do NOT get individual rooms. All team communication happens i
 
 ## After Creation
 
-1. Verify all containers started: check `docker ps` or lifecycle status
-2. Verify Team Room exists: check `teams-registry.json` for `team_room_id`
-3. Verify Leader DM exists: check `teams-registry.json` for `leader_dm_room_id`
-4. Send a greeting to the Team Leader in the Leader Room
-5. The Team Leader will handle coordination with team workers from there
+1. Verify Leader is running: `hiclaw get workers <LEADER_NAME>`
+2. Verify team info: `bash /opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh --action get --team-name <TEAM_NAME>`
+3. Send a greeting to the Team Leader in the Leader Room
+4. The Team Leader will handle coordination with team workers from there

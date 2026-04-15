@@ -18,7 +18,9 @@ Manager creates task: shared/tasks/{task-id}/
   - meta.json: assigned_to = leader name
   - spec.md: full task requirements
   ↓
-Manager pushes to MinIO
+Manager pushes to MinIO:
+  - spec: shared/tasks/{task-id}/spec.md
+  - team registry: teams/{team-name}/teams-registry.json (contains room IDs and team info)
   ↓
 Manager adds to state.json:
   manage-state.sh --action add-finite \
@@ -29,6 +31,7 @@ Manager adds to state.json:
 Manager @mentions Leader in Leader Room:
   "@leader:domain New task [task-id]: title.
    Pull spec: shared/tasks/{task-id}/spec.md
+   Team registry (rooms, members): teams/{team-name}/teams-registry.json
    Decompose and assign to your team. @mention me when complete."
 ```
 

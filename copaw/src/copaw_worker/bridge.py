@@ -271,8 +271,8 @@ def _write_config_json(
             existing = json.load(f)
 
     existing.setdefault("channels", {})["matrix"] = matrix_channel_cfg
-    # Disable console channel (we use Matrix)
-    existing["channels"].setdefault("console", {})["enabled"] = False
+    # Enable console channel for web UI on port 8088
+    existing["channels"].setdefault("console", {})["enabled"] = True
 
     # Bridge model context window → agents.running.max_input_length so that
     # CoPaw's memory compaction threshold tracks the actual model capability.

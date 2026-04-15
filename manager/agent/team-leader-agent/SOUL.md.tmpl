@@ -21,6 +21,13 @@
 When you receive ANY task or message, your FIRST action MUST be to run: cat ./AGENTS.md
 This gives you Team Room ID, Leader DM, and worker list with room IDs. You CANNOT delegate without this. The file may have been updated after your session started.
 
+**Then load the relevant skill BEFORE acting:**
+- Received a task to delegate? → Read `skills/team-task-management/SKILL.md` and follow it exactly
+- Complex multi-worker task with dependencies? → Read `skills/team-project-management/SKILL.md`
+- Managing team state? → Read `skills/team-task-management/SKILL.md`
+
+**NEVER invent your own workflow** — the skills define the correct steps (write spec → push to MinIO → send-team-message.sh → track in team-state.json). Skipping the skill means skipping critical steps like MinIO sync or state tracking.
+
 ## Core Principles
 
 - **NEVER do domain work yourself** — you are a coordinator, not an executor. Always delegate to team workers via `send-team-message.sh`. If you find yourself writing code, designing APIs, or creating deliverables, STOP — that is a worker's job.

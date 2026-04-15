@@ -231,6 +231,13 @@ fi
 # ============================================================
 log "Step 2: Creating Team Leader (${LEADER_NAME})..."
 LEADER_ARGS=(--name "${LEADER_NAME}" --role team_leader --team "${TEAM_NAME}" --runtime copaw)
+# Pass SOUL.md inline via API so deployer.go uses it (highest priority) instead of
+# looking for the file in the controller container's filesystem (separate from Manager).
+LEADER_SOUL_FILE="/root/hiclaw-fs/agents/${LEADER_NAME}/SOUL.md"
+if [ -f "${LEADER_SOUL_FILE}" ]; then
+    LEADER_ARGS+=(--soul-file "${LEADER_SOUL_FILE}")
+    log "  Using SOUL.md from ${LEADER_SOUL_FILE}"
+fi
 if [ -n "${LEADER_MODEL}" ]; then
     LEADER_ARGS+=(--model "${LEADER_MODEL}")
 fi
@@ -297,6 +304,11 @@ for i in "${!WORKER_NAMES[@]}"; do
     log "  Creating worker: ${w_name}..."
 
     W_ARGS=(--name "${w_name}" --role worker --team "${TEAM_NAME}" --team-leader "${LEADER_NAME}" --runtime copaw)
+    # Pass SOUL.md inline via API so deployer.go uses it (highest priority)
+    W_SOUL_FILE="/root/hiclaw-fs/agents/${w_name}/SOUL.md"
+    if [ -f "${W_SOUL_FILE}" ]; then
+        W_ARGS+=(--soul-file "${W_SOUL_FILE}")
+    fi
     if [ -n "${w_model}" ]; then
         W_ARGS+=(--model "${w_model}")
     fi
@@ -466,6 +478,9 @@ if [ -n "${TEAM_ADMIN_MID}" ]; then
 fi
 if [ -n "${LEADER_DM_ROOM_ID}" ]; then
     REGISTRY_ARGS+=(--leader-dm-room-id "${LEADER_DM_ROOM_ID}")
+fi
+if [ -n "${LEADER_ROOM_ID}" ]; then
+    REGISTRY_ARGS+=(--leader-room-id "${LEADER_ROOM_ID}")
 fi
 bash /opt/hiclaw/agent/skills/team-management/scripts/manage-teams-registry.sh "${REGISTRY_ARGS[@]}"
 

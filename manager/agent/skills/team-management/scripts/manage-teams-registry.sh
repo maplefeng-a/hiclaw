@@ -50,6 +50,7 @@ action_add() {
        --arg admin_name "${TEAM_ADMIN:-}" \
        --arg admin_matrix_id "${TEAM_ADMIN_MATRIX_ID:-}" \
        --arg leader_dm_room_id "${LEADER_DM_ROOM_ID:-}" \
+       --arg leader_room_id "${LEADER_ROOM_ID:-}" \
        --arg ts "$(_ts)" \
        '.teams[$name] = {
             leader: $leader,
@@ -57,6 +58,7 @@ action_add() {
             team_room_id: (if $room_id == "" then null else $room_id end),
             admin: (if $admin_name == "" then null else {name: $admin_name, matrix_user_id: (if $admin_matrix_id == "" then null else $admin_matrix_id end)} end),
             leader_dm_room_id: (if $leader_dm_room_id == "" then null else $leader_dm_room_id end),
+            leader_room_id: (if $leader_room_id == "" then null else $leader_room_id end),
             created_at: (if .teams[$name].created_at? then .teams[$name].created_at else $ts end)
         } | .updated_at = $ts' \
        "$REGISTRY_FILE" > "$tmp" && mv "$tmp" "$REGISTRY_FILE"
@@ -134,6 +136,7 @@ TEAM_ROOM_ID=""
 TEAM_ADMIN=""
 TEAM_ADMIN_MATRIX_ID=""
 LEADER_DM_ROOM_ID=""
+LEADER_ROOM_ID=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -146,6 +149,7 @@ while [[ $# -gt 0 ]]; do
         --team-admin)          TEAM_ADMIN="$2";          shift 2 ;;
         --team-admin-matrix-id) TEAM_ADMIN_MATRIX_ID="$2"; shift 2 ;;
         --leader-dm-room-id)   LEADER_DM_ROOM_ID="$2";  shift 2 ;;
+        --leader-room-id)      LEADER_ROOM_ID="$2";     shift 2 ;;
         *)
             echo "Unknown argument: $1" >&2
             exit 1

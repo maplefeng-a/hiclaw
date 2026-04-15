@@ -27,6 +27,7 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 		"HICLAW_FS_SECRET_KEY":       prov.MinIOPassword,
 		"OPENCLAW_DISABLE_BONJOUR":   "1",
 		"OPENCLAW_MDNS_HOSTNAME":     "hiclaw-w-" + workerName,
+		"HICLAW_CONSOLE_PORT":       "8088",
 		"HOME":                       "/root/hiclaw-fs/agents/" + workerName,
 	}
 
