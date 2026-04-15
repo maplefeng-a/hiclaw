@@ -29,8 +29,8 @@ FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
 # ============ Final Image: Python 3.11 ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 
-ARG APT_MIRROR=
-ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG NPM_REGISTRY=https://registry.npmjs.org/
 
 # ---- System dependencies ----

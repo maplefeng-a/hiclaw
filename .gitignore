@@ -51,3 +51,6 @@ hiclaw-controller/hiclaw
 
 # Helm dependency artifacts
 helm/hiclaw/charts/*.tgz
+
+# GitNexus
+.gitnexus/

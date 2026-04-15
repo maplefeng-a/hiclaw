@@ -14,3 +14,7 @@ nodes:
       - containerPort: 30080
         hostPort: 18080
         protocol: TCP
+      # Element Web (NodePort 30081 -> host 18081)
+      - containerPort: 30081
+        hostPort: 18081
+        protocol: TCP

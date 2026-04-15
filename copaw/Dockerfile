@@ -23,8 +23,8 @@ FROM ${HICLAW_CONTROLLER_IMAGE} AS hiclaw-controller
 # ============ Final Image ============
 FROM ${HIGRESS_REGISTRY}/higress/python:3.11-slim
 
-ARG APT_MIRROR=
-ARG PIP_INDEX_URL=https://pypi.org/simple/
+ARG APT_MIRROR=mirrors.aliyun.com
+ARG PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple/
 ARG COPAW_VERSION=1.0.2
 
 # python:3.11-slim is Debian-based, uses /etc/apt/sources.list.d/debian.sources
