@@ -31,6 +31,9 @@ func (b *WorkerEnvBuilder) Build(workerName string, prov *WorkerProvisionResult)
 	}
 
 	b.applyClusterDefaults(env)
+	// Workers should not inherit CMS_SERVICE_NAME (which is Manager-specific).
+	// The entrypoint script falls back to "hiclaw-worker-${WORKER_NAME}" when empty.
+	delete(env, "HICLAW_CMS_SERVICE_NAME")
 	return env
 }
 
@@ -111,5 +114,8 @@ func (b *WorkerEnvBuilder) applyClusterDefaults(env map[string]string) {
 	}
 	if b.defaults.CMSWorkspace != "" {
 		env["HICLAW_CMS_WORKSPACE"] = b.defaults.CMSWorkspace
+	}
+	if b.defaults.CMSServiceName != "" {
+		env["HICLAW_CMS_SERVICE_NAME"] = b.defaults.CMSServiceName
 	}
 }

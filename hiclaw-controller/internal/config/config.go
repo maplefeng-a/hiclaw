@@ -110,6 +110,7 @@ type Config struct {
 	CMSLicenseKey     string
 	CMSProject        string
 	CMSWorkspace      string
+	CMSServiceName    string
 
 	// Pre-resolved worker environment defaults (passed to worker containers)
 	WorkerEnv WorkerEnvDefaults
@@ -135,6 +136,7 @@ type WorkerEnvDefaults struct {
 	CMSLicenseKey     string
 	CMSProject        string
 	CMSWorkspace      string
+	CMSServiceName    string
 }
 
 type managerSpecEnv struct {
@@ -240,6 +242,7 @@ func LoadConfig() *Config {
 		CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
 		CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
 		CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
+		CMSServiceName:    envOrDefault("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager"),
 
 		WorkerEnv: WorkerEnvDefaults{
 			MatrixDomain:  envOrDefault("HICLAW_MATRIX_DOMAIN", "matrix-local.hiclaw.io:8080"),
@@ -258,6 +261,7 @@ func LoadConfig() *Config {
 			CMSLicenseKey:     os.Getenv("HICLAW_CMS_LICENSE_KEY"),
 			CMSProject:        os.Getenv("HICLAW_CMS_PROJECT"),
 			CMSWorkspace:      os.Getenv("HICLAW_CMS_WORKSPACE"),
+			CMSServiceName:    envOrDefault("HICLAW_CMS_SERVICE_NAME", "hiclaw-manager"),
 		},
 	}
 
@@ -532,6 +536,7 @@ func (c *Config) ManagerAgentEnv() map[string]string {
 	setIfNonEmpty("HICLAW_CMS_LICENSE_KEY", c.CMSLicenseKey)
 	setIfNonEmpty("HICLAW_CMS_PROJECT", c.CMSProject)
 	setIfNonEmpty("HICLAW_CMS_WORKSPACE", c.CMSWorkspace)
+	setIfNonEmpty("HICLAW_CMS_SERVICE_NAME", c.CMSServiceName)
 	return env
 }
 
@@ -565,5 +570,6 @@ func (c *Config) AgentConfig() agentconfig.Config {
 		CMSLicenseKey:      c.CMSLicenseKey,
 		CMSProject:         c.CMSProject,
 		CMSWorkspace:       c.CMSWorkspace,
+		CMSServiceName:     c.CMSServiceName,
 	}
 }

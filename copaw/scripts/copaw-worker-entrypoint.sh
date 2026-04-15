@@ -93,7 +93,7 @@ log "  Install dir: ${INSTALL_DIR}"
 log "  CoPaw venv: ${VENV}"
 
 # Set COPAW_WORKING_DIR before starting (read by copaw.constant at import time)
-export COPAW_WORKING_DIR="${INSTALL_DIR}/${WORKER_NAME}/.hiclaw-worker"
+export COPAW_WORKING_DIR="${INSTALL_DIR}/${WORKER_NAME}/.copaw"
 
 # Enable debug logging for troubleshooting
 export COPAW_LOG_LEVEL="${COPAW_LOG_LEVEL:-debug}"
